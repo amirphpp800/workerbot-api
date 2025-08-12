@@ -313,7 +313,7 @@ async function buildDynamicMainMenu(env, uid) {
   // Row 4: Lottery side-by-side with Missions
   rows.push([
     { text: labelFor(settings.button_labels, 'lottery', '🎟 قرعه‌کشی'), callback_data: 'LOTTERY' },
-    { text: labelFor(settings.button_labels, 'missions', '📆 ماموریت‌ها'), callback_data: 'MISSIONS' }
+    { text: labelFor(settings.button_labels, 'missions', '📆 مأموریت‌ها'), callback_data: 'MISSIONS' }
   ]);
 
   // Row 5: Buy Diamonds (single)
@@ -351,11 +351,14 @@ function buildAdminPanelKeyboard() {
   ]);
   rows.push([
     { text: '👑 مدیریت ادمین‌ها', callback_data: 'ADMIN:MANAGE_ADMINS' },
-    { text: '🎟 مدیریت گیفت‌کد', callback_data: 'ADMIN:GIFTS' }
+    { text: '🎁 مدیریت گیفت‌کد', callback_data: 'ADMIN:GIFTS' }
   ]);
   rows.push([
     { text: '🎯 افزودن الماس', callback_data: 'ADMIN:GIVEPOINTS' },
     { text: '📆 ماموریت‌ها', callback_data: 'ADMIN:MISSIONS' }
+  ]);
+  rows.push([
+    { text: '🗄 تهیه پشتیبان', callback_data: 'ADMIN:BACKUP' }
   ]);
   rows.push([
     { text: '🚫 غیرفعال‌سازی دکمه‌ها', callback_data: 'ADMIN:DISABLE_BTNS' }
@@ -383,6 +386,10 @@ function buildFileManageKeyboard(token, file, isAdminUser) {
       { text: '🗑 حذف', callback_data: `DEL:${token}` }
     ]);
     rows.push([
+      { text: `🔒 محدودیت (${(file?.max_downloads||0) > 0 ? file.max_downloads : '∞'})`, callback_data: `LIMIT:${token}` },
+      { text: `${file?.delete_on_limit ? '🗑 حذف پس از اتمام: روشن' : '🗑 حذف پس از اتمام: خاموش'}`, callback_data: `DELAFTER:${token}` }
+    ]);
+    rows.push([
       { text: '♻️ جایگزینی محتوا', callback_data: `REPLACE:${token}` }
     ]);
   } else {
@@ -406,6 +413,24 @@ function buildCostKeyboard(token) {
       ],
       [
         { text: '🔢 مقدار دلخواه', callback_data: `COST_CUSTOM:${token}` },
+        { text: '⬅️ بازگشت', callback_data: 'MYFILES:0' }
+      ]
+    ]
+  };
+}
+
+function buildLimitKeyboard(token) {
+  return {
+    inline_keyboard: [
+      [
+        { text: '♾️ بدون محدودیت', callback_data: `LIMIT_SET:${token}:0` },
+        { text: '1', callback_data: `LIMIT_SET:${token}:1` },
+        { text: '3', callback_data: `LIMIT_SET:${token}:3` },
+        { text: '5', callback_data: `LIMIT_SET:${token}:5` },
+        { text: '10', callback_data: `LIMIT_SET:${token}:10` }
+      ],
+      [
+        { text: '🔢 مقدار دلخواه', callback_data: `LIMIT_CUSTOM:${token}` },
         { text: '⬅️ بازگشت', callback_data: 'MYFILES:0' }
       ]
     ]
@@ -541,6 +566,7 @@ async function onMessage(msg, env) {
       }
       return;
     }
+    // Set custom cost for a file
     // Balance: get receiver id
     if (session.awaiting === 'bal:to' && text) {
       const toId = Number(text.trim());
@@ -550,6 +576,32 @@ async function onMessage(msg, env) {
       if (!usersIndex.includes(toId)) { await tgApi('sendMessage', { chat_id: chatId, text: 'کاربر مقصد یافت نشد.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } }); return; }
       await setSession(env, uid, { awaiting: `bal:amount:${toId}` });
       await tgApi('sendMessage', { chat_id: chatId, text: 'مبلغ انتقال (الماس) را وارد کنید (حداقل 2 و حداکثر 50):', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+      return;
+    }
+    if (session.awaiting?.startsWith('setcost:') && text) {
+      const token = session.awaiting.split(':')[1];
+      const amt = Number(text.trim());
+      await setSession(env, uid, {});
+      if (!Number.isFinite(amt) || amt < 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
+      const f = await kvGetJson(env, `file:${token}`);
+      if (!f) { await tgApi('sendMessage', { chat_id: chatId, text: 'فایل یافت نشد.' }); return; }
+      if (!isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: 'اجازه ندارید.' }); return; }
+      f.cost_points = amt; await kvPutJson(env, `file:${token}`, f);
+      await tgApi('sendMessage', { chat_id: chatId, text: `هزینه تنظیم شد: ${amt}` });
+      return;
+    }
+    // Set custom download limit for a file
+    if (session.awaiting?.startsWith('setlimit:') && text) {
+      const token = session.awaiting.split(':')[1];
+      const amt = Number(text.trim());
+      await setSession(env, uid, {});
+      if (!Number.isFinite(amt) || amt < 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
+      const f = await kvGetJson(env, `file:${token}`);
+      if (!f) { await tgApi('sendMessage', { chat_id: chatId, text: 'فایل یافت نشد.' }); return; }
+      if (!isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: 'اجازه ندارید.' }); return; }
+      f.max_downloads = Math.max(0, Math.floor(amt));
+      await kvPutJson(env, `file:${token}`, f);
+      await tgApi('sendMessage', { chat_id: chatId, text: `محدودیت دانلود تنظیم شد: ${f.max_downloads || 'نامحدود'}` });
       return;
     }
     // Balance: get amount
@@ -1360,6 +1412,21 @@ async function onCallback(cb, env) {
     await tgApi('sendMessage', { chat_id: chatId, text: '🛠 پنل مدیریت', reply_markup: buildAdminPanelKeyboard() });
     return;
   }
+  if (data === 'ADMIN:BACKUP' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'در حال تهیه پشتیبان...' });
+    try {
+      const backup = await createKvBackup(env);
+      const adminIds = await getAdminIds(env);
+      const mainAdmin = adminIds && adminIds.length ? adminIds[0] : (MAIN_ADMIN_ID || uid);
+      const content = JSON.stringify(backup, null, 2);
+      await tgApi('sendMessage', { chat_id: mainAdmin, text: '📦 پشتیبان دیتابیس آماده شد. در حال ارسال...' });
+      await tgApi('sendDocument', { chat_id: mainAdmin, document: new Blob([content], { type: 'application/json' }), caption: `backup_${new Date().toISOString().slice(0,10)}.json` });
+    } catch (e) {
+      await tgApi('sendMessage', { chat_id: chatId, text: '❌ خطا در تهیه پشتیبان.' });
+    }
+    return;
+  }
   if (data === 'HELP') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'راهنما' });
     const isAdminUser = isAdmin(uid);
@@ -1748,7 +1815,7 @@ async function onCallback(cb, env) {
   if (data === 'REDEEM_GIFT') {
     await setSession(env, uid, { awaiting: 'redeem_gift' });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    await tgApi('sendMessage', { chat_id: chatId, text: 'کد هدیه را وارد کنید:' });
+    await tgApi('sendMessage', { chat_id: chatId, text: '🎁 کد هدیه را وارد کنید:' });
     return;
   }
   if (data === 'REFERRAL') {
@@ -1781,10 +1848,16 @@ async function onCallback(cb, env) {
 دانلود: ${f.downloads||0}
 آخرین دانلود: ${f.last_download ? formatDate(f.last_download) : '-'}
 وضعیت: ${f.disabled ? '🔴 غیرفعال' : '🟢 فعال'}
+ محدودیت دانلود: ${(f.max_downloads||0) > 0 ? f.max_downloads : 'نامحدود'}
+ حذف پس از اتمام: ${f.delete_on_limit ? 'بله' : 'خیر'}
 لینک اشتراک: \`${link}\``;
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const baseRow = [{ text: '📥 دریافت', callback_data: `SEND:${token}` }, { text: '🔗 کپی لینک', callback_data: `LINK:${token}` }];
-    const adminExtras = isAdmin(uid) ? [{ text: '✏️ ویرایش نام', callback_data: `RENAME:${token}` }, { text: '♻️ جایگزینی', callback_data: `REPLACE:${token}` }] : [{ text: '✏️ تغییر نام', callback_data: `RENAME:${token}` }];
+    const adminExtras = isAdmin(uid) ? [
+      { text: '✏️ ویرایش نام', callback_data: `RENAME:${token}` },
+      { text: '♻️ جایگزینی', callback_data: `REPLACE:${token}` },
+      { text: '🔒 محدودیت دانلود', callback_data: `LIMIT:${token}` }
+    ] : [{ text: '✏️ تغییر نام', callback_data: `RENAME:${token}` }];
     const rows = [baseRow, adminExtras, [{ text: '⬅️ بازگشت', callback_data: `MYFILES:${page}` }]];
     await tgApi('sendMessage', { chat_id: chatId, text: details, parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
     return;
@@ -1845,10 +1918,31 @@ async function onCallback(cb, env) {
     if ((user.diamonds || 0) < needed) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'الماس کافی نیست' }); return; }
     user.diamonds = (user.diamonds || 0) - needed; await kvPutJson(env, `user:${uid}`, user);
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'پرداخت شد' });
+    // per-file limit enforcement before delivery
+    if ((file.max_downloads || 0) > 0 && (file.downloads || 0) >= file.max_downloads) {
+      await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ ظرفیت دانلود این فایل به پایان رسیده است.' });
+      if (file.delete_on_limit) {
+        try {
+          const upKey = `uploader:${file.owner}`;
+          const upList = (await kvGetJson(env, upKey)) || [];
+          await kvPutJson(env, upKey, upList.filter(t => t !== token));
+          await kvDelete(env, `file:${token}`);
+        } catch (_) {}
+      }
+      return;
+    }
     // deliver file
     await deliverStoredContent(chatId, file);
     file.downloads = (file.downloads || 0) + 1; file.last_download = now();
     await kvPutJson(env, `file:${token}`, file);
+    if ((file.max_downloads || 0) > 0 && (file.downloads || 0) >= file.max_downloads && file.delete_on_limit) {
+      try {
+        const upKey = `uploader:${file.owner}`;
+        const upList = (await kvGetJson(env, upKey)) || [];
+        await kvPutJson(env, upKey, upList.filter(t => t !== token));
+        await kvDelete(env, `file:${token}`);
+      } catch (_) {}
+    }
     if ((limit > 0) && !isAdmin(uid)) {
       const dk = `usage:${uid}:${dayKey()}`;
       const used = (await kvGetJson(env, dk)) || { count: 0 };
@@ -1901,6 +1995,52 @@ async function onCallback(cb, env) {
     await setSession(env, uid, { awaiting: `setcost:${token}` });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await tgApi('sendMessage', { chat_id: chatId, text: 'عدد هزینه دلخواه را ارسال کنید:' });
+    return;
+  }
+  if (data.startsWith('LIMIT:')) {
+    const token = data.split(':')[1];
+    if (!isAdmin(uid)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'فقط ادمین' }); return; }
+    if (!isValidTokenFormat(token)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'توکن نامعتبر' }); return; }
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'محدودیت دانلود را انتخاب کنید:', reply_markup: buildLimitKeyboard(token) });
+    return;
+  }
+  if (data.startsWith('LIMIT_SET:')) {
+    const [, token, amountStr] = data.split(':');
+    if (!isValidTokenFormat(token)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'توکن نامعتبر' }); return; }
+    const amount = parseInt(amountStr, 10) || 0;
+    const file = await kvGetJson(env, `file:${token}`);
+    if (file && isAdmin(uid)) {
+      file.max_downloads = Math.max(0, amount);
+      await kvPutJson(env, `file:${token}`, file);
+      await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: `حد: ${amount || '∞'}` });
+      const built = await buildMyFilesKeyboard(env, uid, 0);
+      await tgApi('sendMessage', { chat_id: chatId, text: built.text, reply_markup: built.reply_markup });
+    } else {
+      await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'اجازه ندارید' });
+    }
+    return;
+  }
+  if (data.startsWith('LIMIT_CUSTOM:')) {
+    const token = data.split(':')[1];
+    if (!isAdmin(uid)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'فقط ادمین' }); return; }
+    if (!isValidTokenFormat(token)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'توکن نامعتبر' }); return; }
+    await setSession(env, uid, { awaiting: `setlimit:${token}` });
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'عدد محدودیت دانلود را ارسال کنید (0 = نامحدود):' });
+    return;
+  }
+  if (data.startsWith('DELAFTER:')) {
+    const token = data.split(':')[1];
+    if (!isValidTokenFormat(token)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'توکن نامعتبر' }); return; }
+    const file = await kvGetJson(env, `file:${token}`);
+    if (!file) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'یافت نشد' }); return; }
+    if (!isAdmin(uid)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'فقط ادمین' }); return; }
+    file.delete_on_limit = !file.delete_on_limit;
+    await kvPutJson(env, `file:${token}`, file);
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: file.delete_on_limit ? 'حذف پس از اتمام: روشن' : 'خاموش' });
+    const built = await buildMyFilesKeyboard(env, uid, 0);
+    await tgApi('sendMessage', { chat_id: chatId, text: built.text, reply_markup: built.reply_markup });
     return;
   }
   if (data.startsWith('TOGGLE:')) {
@@ -2209,7 +2349,7 @@ async function onCallback(cb, env) {
     const list = await listGiftCodes(env, 20);
     const lines = list.map(g => `${g.code} | ${g.amount} الماس | ${g.disabled ? 'غیرفعال' : 'فعال'} | ${g.used||0}/${g.max_uses||'∞'}`).join('\n') || '—';
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    await tgApi('sendMessage', { chat_id: chatId, text: `🎟 گیفت‌کدها:\n${lines}`, reply_markup: { inline_keyboard: [
+    await tgApi('sendMessage', { chat_id: chatId, text: `🎁 گیفت‌کدها:\n${lines}`, reply_markup: { inline_keyboard: [
       [{ text: '➕ ایجاد گیفت‌کد', callback_data: 'ADMIN:GIFT_CREATE' }],
       ...list.map(g => ([
         { text: `${g.disabled ? '🟢 فعال‌سازی' : '🔴 غیرفعال'}`, callback_data: `ADMIN:GIFT_TOGGLE:${g.code}` },
@@ -2300,10 +2440,14 @@ async function onCallback(cb, env) {
   if (data === 'ADMIN:MISSIONS' && isAdmin(uid)) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const v = await listMissions(env);
-    const listText = v.length ? v.map(m => `- ${m.id}: ${m.title} (${m.period||'once'}) +${m.reward}`).join('\n') : '—';
-    await tgApi('sendMessage', { chat_id: chatId, text: `📆 ماموریت‌ها:\n${listText}`, reply_markup: { inline_keyboard: [
+    const listText = v.length ? v.map(m => `- ${m.id}: ${m.title} (${m.period||'once'} | ${m.type||'generic'}) ${m.enabled ? '🟢' : '🔴'} +${m.reward}`).join('\n') : '—';
+    await tgApi('sendMessage', { chat_id: chatId, text: `📆 مأموریت‌ها:\n${listText}`, reply_markup: { inline_keyboard: [
       [{ text: '➕ ایجاد', callback_data: 'ADMIN:MIS:CREATE' }, { text: '✏️ ویرایش', callback_data: 'ADMIN:MIS:EDIT' }],
-      ...v.map(m => ([{ text: `❌ حذف ${m.id}`, callback_data: `ADMIN:MIS:DEL:${m.id}` }])),
+      [{ text: '🧩 کوییز هفتگی', callback_data: 'ADMIN:MIS:CREATE:QUIZ' }, { text: '❓ سوال هفتگی', callback_data: 'ADMIN:MIS:CREATE:QUESTION' }, { text: '👥 دعوت هفتگی', callback_data: 'ADMIN:MIS:CREATE:INVITE' }],
+      ...v.map(m => ([
+        { text: `${m.enabled ? '🔴 غیرفعال' : '🟢 فعال‌سازی'} ${m.id}` , callback_data: `ADMIN:MIS:TOGGLE:${m.id}` },
+        { text: `🗑 حذف ${m.id}`, callback_data: `ADMIN:MIS:DEL:${m.id}` }
+      ])),
       [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]
     ] } });
     return;
@@ -2318,6 +2462,17 @@ async function onCallback(cb, env) {
     await setSession(env, uid, { awaiting: 'mission_create:title' });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await tgApi('sendMessage', { chat_id: chatId, text: 'عنوان ماموریت را ارسال کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  if (data.startsWith('ADMIN:MIS:TOGGLE:') && isAdmin(uid)) {
+    const id = data.split(':')[3];
+    const key = `mission:${id}`;
+    const m = await kvGetJson(env, key);
+    if (!m) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'یافت نشد' }); return; }
+    m.enabled = !m.enabled;
+    await kvPutJson(env, key, m);
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: m.enabled ? 'فعال شد' : 'غیرفعال شد' });
+    await tgApi('sendMessage', { chat_id: chatId, text: `ماموریت ${id} اکنون ${m.enabled ? 'فعال' : 'غیرفعال'} است.` });
     return;
   }
   if (data === 'ADMIN:MIS:CREATE:QUIZ' && isAdmin(uid)) {
@@ -3480,6 +3635,11 @@ async function handleApiRequest(req, env, url, ctx) {
     });
   }
 
+  if (path === 'backup' && req.method === 'GET') {
+    const backup = await createKvBackup(env);
+    return new Response(JSON.stringify(backup), { headers: { 'Content-Type': 'application/json' } });
+  }
+
   // Block/unblock via API
   if (path === 'block' && req.method === 'POST') {
     const { uid } = await req.json().catch(() => ({ uid: null }));
@@ -3501,6 +3661,49 @@ async function handleApiRequest(req, env, url, ctx) {
 }
 
 /* -------------------- Admin utilities -------------------- */
+async function createKvBackup(env) {
+  const users = (await kvGetJson(env, 'index:users')) || [];
+  const admins = await getAdminIds(env);
+  const botSettings = await getSettings(env);
+  const missionsIndex = (await kvGetJson(env, 'missions:index')) || [];
+  const giftsIndex = (await kvGetJson(env, 'gift:index')) || [];
+  const lotteryCfg = await getLotteryConfig(env);
+  const ticketsIdx = (await kvGetJson(env, await ticketsIndexKey())) || [];
+  const data = {
+    meta: { created_at: now() },
+    admins,
+    settings: botSettings,
+    users: [],
+    files: [],
+    missions: [],
+    gifts: [],
+    lottery: lotteryCfg,
+    tickets: []
+  };
+  for (const uid of users) {
+    const user = (await kvGetJson(env, `user:${uid}`)) || { id: uid };
+    data.users.push(user);
+    const list = (await kvGetJson(env, `uploader:${uid}`)) || [];
+    for (const t of list) {
+      const f = await kvGetJson(env, `file:${t}`);
+      if (f) data.files.push(f);
+    }
+  }
+  for (const mid of missionsIndex) {
+    const m = await kvGetJson(env, `mission:${mid}`);
+    if (m) data.missions.push(m);
+  }
+  for (const code of giftsIndex) {
+    const g = await kvGetJson(env, `gift:${code}`);
+    if (g) data.gifts.push(g);
+  }
+  for (const tid of ticketsIdx) {
+    const t = await getTicket(env, tid);
+    const msgs = await getTicketMessages(env, tid, 200);
+    if (t) data.tickets.push({ ...t, messages: msgs });
+  }
+  return data;
+}
 function isAdmin(uid) { 
   const id = Number(uid);
   if (DYNAMIC_ADMIN_IDS && DYNAMIC_ADMIN_IDS.length) return DYNAMIC_ADMIN_IDS.includes(id);
@@ -3630,6 +3833,21 @@ async function handleBotDownload(env, uid, chatId, token, ref) {
   if (updateMode && !isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: '🔧 ربات در حال بروزرسانی است. لطفاً دقایقی دیگر مجدداً تلاش کنید.' }); return; }
   if (file.disabled) { await tgApi('sendMessage', { chat_id: chatId, text: 'فایل توسط مالک/ادمین غیرفعال شده است' }); return; }
 
+  // per-file download limit enforcement
+  if ((file.max_downloads || 0) > 0 && (file.downloads || 0) >= file.max_downloads) {
+    await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ ظرفیت دانلود این فایل به پایان رسیده است.' });
+    // delete if flagged
+    if (file.delete_on_limit) {
+      try {
+        const upKey = `uploader:${file.owner}`;
+        const upList = (await kvGetJson(env, upKey)) || [];
+        await kvPutJson(env, upKey, upList.filter(t => t !== token));
+        await kvDelete(env, `file:${token}`);
+      } catch (_) {}
+    }
+    return;
+  }
+
   // enforce required channel membership for non-admins
   const req = await getRequiredChannels(env);
   if (req.length && !(await isUserJoinedAllRequiredChannels(env, uid))) {
@@ -3691,6 +3909,16 @@ async function handleBotDownload(env, uid, chatId, token, ref) {
   // stats + usage increment
   file.downloads = (file.downloads || 0) + 1; file.last_download = now();
   await kvPutJson(env, `file:${token}`, file);
+
+  // if reached limit after increment, optionally delete
+  if ((file.max_downloads || 0) > 0 && (file.downloads || 0) >= file.max_downloads && file.delete_on_limit) {
+    try {
+      const upKey = `uploader:${file.owner}`;
+      const upList = (await kvGetJson(env, upKey)) || [];
+      await kvPutJson(env, upKey, upList.filter(t => t !== token));
+      await kvDelete(env, `file:${token}`);
+    } catch (_) {}
+  }
   // increase usage counter if daily limit is set
   const settings = await getSettings(env);
   if ((settings.daily_limit || 0) > 0 && !isAdmin(uid)) {
@@ -3776,7 +4004,7 @@ async function buildMissionsView(env, uid) {
   if (quiz) actions.push([{ text: '🎮 شرکت در کوییز هفتگی', callback_data: `MIS:QUIZ:${quiz.id}` }]);
   if (question) actions.push([{ text: '❓ پاسخ سوال هفتگی', callback_data: `MIS:Q:${question.id}` }]);
   actions.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-  return { text: `📆 ماموریت‌ها:\n${list}\n\nبا انجام فعالیت‌ها و چک‌این هفتگی الماس بگیرید.`, reply_markup: { inline_keyboard: actions } };
+  return { text: `📆 مأموریت‌ها:\n${list}\n\nبا انجام فعالیت‌ها و چک‌این هفتگی الماس بگیرید.`, reply_markup: { inline_keyboard: actions } };
 }
 
 /* -------------------- Lottery helpers -------------------- */
