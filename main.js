@@ -1641,6 +1641,7 @@ async function onCallback(cb, env) {
     const toId = Number(toIdStr);
     const amount = Number(amountStr);
     if (!Number.isFinite(toId) || !Number.isFinite(amount)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); return; }
+    if (amount < 2 || amount > 50) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'بازه انتقال 2 تا 50 الماس است' }); return; }
     const fromKey = `user:${uid}`;
     const toKey = `user:${toId}`;
     const fromUser = (await kvGetJson(env, fromKey)) || { id: uid, diamonds: 0 };
