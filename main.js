@@ -847,15 +847,26 @@ async function onMessage(msg, env) {
       ]] };
       try {
         const admins = await getAdminIds(env);
-        const recipients = (Array.isArray(admins) && admins.length) ? admins : [(MAIN_ADMIN_ID || uid)];
-        for (const aid of recipients) {
-          try {
-            if (isPhoto) {
-              await tgApi('sendPhoto', { chat_id: aid, photo: fileId, caption, reply_markup: kb });
-            } else {
-              await tgApi('sendDocument', { chat_id: aid, document: fileId, caption, reply_markup: kb });
-            }
-          } catch (_) {}
+        let recipients = [];
+        if (Array.isArray(admins) && admins.length) {
+          recipients = admins;
+        } else if (MAIN_ADMIN_ID) {
+          recipients = [Number(MAIN_ADMIN_ID)];
+        } else if (RUNTIME.adminIds && RUNTIME.adminIds.length) {
+          recipients = RUNTIME.adminIds.map(Number);
+        }
+        if (!recipients.length) {
+          await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ مدیر پیکربندی نشده است. رسید ذخیره شد و پس از تنظیم مدیر بررسی می‌شود.' });
+        } else {
+          for (const aid of recipients) {
+            try {
+              if (isPhoto) {
+                await tgApi('sendPhoto', { chat_id: aid, photo: fileId, caption, reply_markup: kb });
+              } else {
+                await tgApi('sendDocument', { chat_id: aid, document: fileId, caption, reply_markup: kb });
+              }
+            } catch (_) {}
+          }
         }
       } catch (_) {}
       await tgApi('sendMessage', { chat_id: chatId, text: '✅ رسید دریافت شد. نتیجه بررسی به شما اعلام می‌شود.' });
