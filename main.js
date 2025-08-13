@@ -224,6 +224,16 @@ function makeToken(len = 20) {
   const bytes = crypto.getRandomValues(new Uint8Array(len));
   return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, '').slice(0, len);
 }
+// Generate a unique 8-digit numeric purchase ID
+async function generatePurchaseId(env, maxAttempts = 10) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const id = String(Math.floor(10000000 + Math.random() * 90000000));
+    const exists = await kvGetJson(env, `purchase:${id}`);
+    if (!exists) return id;
+  }
+  const fallback = String(Math.floor(Date.now() % 100000000)).padStart(8, '0');
+  return fallback;
+}
 function now() { return Date.now(); }
 function formatDate(timestamp) {
   return new Date(timestamp).toLocaleDateString('fa-IR', { 
@@ -402,6 +412,9 @@ function buildAdminPanelKeyboard() {
   ]);
   rows.push([
     { text: '🗄 تهیه پشتیبان', callback_data: 'ADMIN:BACKUP' }
+  ]);
+  rows.push([
+    { text: '💳 مدیریت پرداخت‌ها', callback_data: 'ADMIN:PAYMENTS' }
   ]);
   rows.push([
     { text: '🚫 غیرفعال‌سازی دکمه‌ها', callback_data: 'ADMIN:DISABLE_BTNS' }
@@ -1531,6 +1544,59 @@ async function onCallback(cb, env) {
     }
     return;
   }
+  if (data === 'ADMIN:PAYMENTS' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const idx = (await kvGetJson(env, 'index:purchases')) || [];
+    const first20 = idx.slice(0, 20);
+    const entries = [];
+    for (const pid of first20) {
+      const p = await kvGetJson(env, `purchase:${pid}`);
+      if (!p) continue;
+      entries.push(p);
+    }
+    const lines = entries.map(p => `#${String(p.id).padStart(8,'0')} | ${p.user_id} | ${p.diamonds}💎 | ${(p.price_toman||0).toLocaleString('fa-IR')}ت | ${p.status}`);
+    const text = lines.length ? `آخرین تراکنش‌ها (۲۰ مورد):
+${lines.join('\n')}
+
+برای مشاهده رسید یا تصمیم، از دکمه‌های زیر استفاده کنید.` : 'هیچ تراکنشی یافت نشد.';
+    const kb = { inline_keyboard: [
+      ...entries.map(p => ([
+        { text: `🧾 ${String(p.id).padStart(8,'0')} (${p.status==='pending_review'?'در انتظار':'بررسی‌شده'})`, callback_data: `ADMIN:PAY:VIEW:${p.id}` },
+      ])),
+      [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('ADMIN:PAY:VIEW:') && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const id = data.split(':')[3];
+    const p = await kvGetJson(env, `purchase:${id}`);
+    if (!p) { await tgApi('sendMessage', { chat_id: chatId, text: 'سفارش یافت نشد.' }); return; }
+    const hdr = `خرید #${String(p.id).padStart(8,'0')}
+کاربر: ${p.user_id}
+بسته: ${p.diamonds} الماس
+مبلغ: ${(p.price_toman||0).toLocaleString('fa-IR')} تومان
+وضعیت: ${p.status}`;
+    const actions = [];
+    if (p.status === 'pending_review') {
+      actions.push(
+        [{ text: '✅ تایید و افزودن الماس', callback_data: `PAYAPP:${p.id}` }, { text: '❌ رد', callback_data: `PAYREJ:${p.id}` }]
+      );
+    }
+    actions.push([{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PAYMENTS' }]);
+    const kb = { inline_keyboard: actions };
+    if (p.receipt_file_id) {
+      try {
+        await tgApi('sendPhoto', { chat_id: chatId, photo: p.receipt_file_id, caption: hdr, reply_markup: kb });
+      } catch (_) {
+        await tgApi('sendDocument', { chat_id: chatId, document: p.receipt_file_id, caption: hdr, reply_markup: kb });
+      }
+    } else {
+      await tgApi('sendMessage', { chat_id: chatId, text: hdr, reply_markup: kb });
+    }
+    return;
+  }
   if (data === 'HELP') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'راهنما' });
     const isAdminUser = isAdmin(uid);
@@ -1579,9 +1645,18 @@ async function onCallback(cb, env) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const pkgId = data.split(':')[1];
     const pkg = getDiamondPackageById(pkgId);
-    const id = makeToken(12);
+    const id = await generatePurchaseId(env);
     const purchase = { id, user_id: uid, diamonds: pkg.diamonds, price_toman: pkg.price_toman, pkg_id: pkg.id, status: 'awaiting_receipt', created_at: now() };
     await kvPutJson(env, `purchase:${id}`, purchase);
+    // update purchases index (prepend newest)
+    try {
+      const idxKey = 'index:purchases';
+      const idx = (await kvGetJson(env, idxKey)) || [];
+      idx.unshift(id);
+      // keep at most 1000 entries
+      if (idx.length > 1000) idx.length = 1000;
+      await kvPutJson(env, idxKey, idx);
+    } catch (_) {}
     const txt = `✅ بسته انتخاب شد: ${pkg.diamonds} الماس (${pkg.price_toman.toLocaleString('fa-IR')} تومان)
 شناسه خرید شما: \`${id}\`
 لطفاً مبلغ را به کارت زیر واریز کنید و سپس روی «پرداخت کردم» بزنید:
@@ -1605,7 +1680,7 @@ async function onCallback(cb, env) {
       return;
     }
     await setSession(env, uid, { awaiting: `payment_receipt:${purchaseId}` });
-    await tgApi('sendMessage', { chat_id: chatId, text: `شناسه خرید شما: ${purchaseId}\nلطفاً عکس رسید پرداخت را ارسال کنید.` });
+    await tgApi('sendMessage', { chat_id: chatId, text: `شناسه خرید شما: \`${purchaseId}\`\nلطفاً عکس رسید پرداخت را ارسال کنید.`, parse_mode: 'Markdown' });
     return;
   }
   if (data === 'PAID_CONFIRM') {
