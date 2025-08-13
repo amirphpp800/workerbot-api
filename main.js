@@ -347,6 +347,10 @@ async function buildDynamicMainMenu(env, uid) {
     { text: labelFor(settings.button_labels, 'gift', '🎁 کد هدیه'), callback_data: 'REDEEM_GIFT' },
     { text: labelFor(settings.button_labels, 'get_by_token', '🔑 دریافت با توکن'), callback_data: 'GET_BY_TOKEN' }
   ]);
+  // Add Support under Gift/Token row
+  rows.push([
+    { text: '🆘 پشتیبانی', callback_data: 'SUPPORT' }
+  ]);
 
   // Row 3: (Support removed per request)
 
@@ -706,43 +710,35 @@ async function onMessage(msg, env) {
       await tgApi('sendMessage', { chat_id: chatId, text: '✅ پاسخ ارسال شد.' });
       return;
     }
-    // User ticket creation steps
+    // User ticket creation steps (simplified: Category -> Description -> Submit)
     if (session.awaiting === 'ticket:new:category' && text) {
       const category = text.trim().slice(0, 50);
-      await setSession(env, uid, { awaiting: `ticket:new:subject:${btoa(encodeURIComponent(JSON.stringify({ category })) )}` });
-      await tgApi('sendMessage', { chat_id: chatId, text: 'موضوع تیکت را وارد کنید:' });
+      const base = { category };
+      await setSession(env, uid, { awaiting: `ticket:new:desc:${btoa(encodeURIComponent(JSON.stringify(base)))}` });
+      await tgApi('sendMessage', { chat_id: chatId, text: 'شرح کامل تیکت را ارسال کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
       return;
     }
+    // Back-compat: if old subject step appears, treat input as description
     if (session.awaiting?.startsWith('ticket:new:subject:') && text) {
       const base64 = session.awaiting.split(':')[3];
       const base = JSON.parse(decodeURIComponent(atob(base64)));
-      base.subject = text.trim().slice(0, 120);
-      await setSession(env, uid, { awaiting: `ticket:new:desc:${btoa(encodeURIComponent(JSON.stringify(base)))}` });
-      await tgApi('sendMessage', { chat_id: chatId, text: 'شرح کامل تیکت را ارسال کنید:' });
+      const desc = text.trim().slice(0, 2000);
+      // Show confirmation
+      const preview = `بررسی و تایید:\nدسته: ${base.category}\nشرح:\n${desc.slice(0, 200)}${desc.length>200?'...':''}`;
+      const payload = btoa(encodeURIComponent(JSON.stringify({ category: base.category, desc })));
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: preview, reply_markup: { inline_keyboard: [[{ text: '✅ ثبت', callback_data: `TKT:SUBMIT:${payload}` }],[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
       return;
     }
     if (session.awaiting?.startsWith('ticket:new:desc:') && text) {
       const base64 = session.awaiting.split(':')[3];
       const base = JSON.parse(decodeURIComponent(atob(base64)));
       const desc = text.trim().slice(0, 2000);
-      const userKey = `user:${uid}`;
-      const u = (await kvGetJson(env, userKey)) || { id: uid };
-      const created = await createTicket(env, {
-        user_id: uid,
-        username: u.username || null,
-        category: base.category,
-        subject: base.subject,
-        desc
-      });
+      // Show confirmation before submit
+      const preview = `بررسی و تایید:\nدسته: ${base.category}\nشرح:\n${desc.slice(0, 200)}${desc.length>200?'...':''}`;
+      const payload = btoa(encodeURIComponent(JSON.stringify({ category: base.category, desc })));
       await setSession(env, uid, {});
-      await tgApi('sendMessage', { chat_id: chatId, text: `✅ تیکت شما ثبت شد. شناسه: #${created.id}` });
-      try {
-        const admins = await getAdminIds(env);
-        const notice = `🧾 تیکت جدید #${created.id} از ${uid}${u.username ? ` (@${u.username})` : ''}\nموضوع: ${created.subject}\nدسته: ${created.category}`;
-        for (const aid of admins) {
-          try { await tgApi('sendMessage', { chat_id: aid, text: notice }); } catch (_) {}
-        }
-      } catch(_) {}
+      await tgApi('sendMessage', { chat_id: chatId, text: preview, reply_markup: { inline_keyboard: [[{ text: '✅ ثبت', callback_data: `TKT:SUBMIT:${payload}` }],[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
       return;
     }
     // Admin generic upload flow (supports text/media/doc)
@@ -849,11 +845,19 @@ async function onMessage(msg, env) {
         { text: '✅ تایید و افزودن الماس', callback_data: `PAYAPP:${purchase.id}` },
         { text: '❌ رد', callback_data: `PAYREJ:${purchase.id}` }
       ]] };
-      if (isPhoto) {
-        await tgApi('sendPhoto', { chat_id: MAIN_ADMIN_ID, photo: fileId, caption, reply_markup: kb });
-      } else {
-        await tgApi('sendDocument', { chat_id: MAIN_ADMIN_ID, document: fileId, caption, reply_markup: kb });
-      }
+      try {
+        const admins = await getAdminIds(env);
+        const recipients = (Array.isArray(admins) && admins.length) ? admins : [(MAIN_ADMIN_ID || uid)];
+        for (const aid of recipients) {
+          try {
+            if (isPhoto) {
+              await tgApi('sendPhoto', { chat_id: aid, photo: fileId, caption, reply_markup: kb });
+            } else {
+              await tgApi('sendDocument', { chat_id: aid, document: fileId, caption, reply_markup: kb });
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
       await tgApi('sendMessage', { chat_id: chatId, text: '✅ رسید دریافت شد. نتیجه بررسی به شما اعلام می‌شود.' });
       return;
     }
@@ -1529,11 +1533,18 @@ async function onCallback(cb, env) {
     // Show structured support options instead of free-form prompt
     const kb = { inline_keyboard: [
       [{ text: '🧾 ثبت تیکت جدید', callback_data: 'TICKET:NEW' }],
+      [{ text: '✉️ ارسال پیام به پشتیبانی', callback_data: 'SUPPORT:MSG' }],
       [{ text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
     await setSession(env, uid, {});
     await tgApi('sendMessage', { chat_id: chatId, text: '🆘 پشتیبانی — لطفاً یکی از گزینه‌ها را انتخاب کنید:', reply_markup: kb });
+    return;
+  }
+  if (data === 'SUPPORT:MSG') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await setSession(env, uid, { awaiting: 'support_wait' });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'پیام خود را برای پشتیبانی ارسال کنید. می‌توانید متن، عکس یا فایل ارسال کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
     return;
   }
   if (data.startsWith('SUPREPLY:') && isAdmin(uid)) {
@@ -1681,6 +1692,7 @@ async function onCallback(cb, env) {
         [{ text: '🧾 ثبت تیکت جدید', callback_data: 'TICKET:NEW' }],
         [{ text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }],
         [{ text: '💸 انتقال موجودی', callback_data: 'BAL:START' }],
+        [{ text: '🆘 پشتیبانی', callback_data: 'SUPPORT' }],
         [{ text: '🏠 منو', callback_data: 'MENU' }]
       ] };
       await tgApi('sendMessage', { chat_id: chatId, text, reply_markup });
@@ -1720,6 +1732,7 @@ async function onCallback(cb, env) {
         { text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }
       ],
       [{ text: '💸 انتقال موجودی', callback_data: 'BAL:START' }],
+      [{ text: '🆘 پشتیبانی', callback_data: 'SUPPORT' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
     await tgApi('sendMessage', { chat_id: chatId, text, reply_markup });
@@ -1767,7 +1780,7 @@ async function onCallback(cb, env) {
     await setSession(env, uid, { awaiting: 'ticket:new:category' });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const categories = ['عمومی', 'پرداخت', 'فنی'];
-    await tgApi('sendMessage', { chat_id: chatId, text: 'موضوع کلی تیکت را انتخاب یا تایپ کنید:', reply_markup: { inline_keyboard: [
+    await tgApi('sendMessage', { chat_id: chatId, text: 'دسته تیکت را انتخاب یا تایپ کنید:', reply_markup: { inline_keyboard: [
       ...categories.map(c => ([{ text: c, callback_data: `TKT:CAT:${encodeURIComponent(c)}` }])),
       [{ text: '❌ انصراف', callback_data: 'CANCEL' }]
     ] } });
@@ -1775,9 +1788,32 @@ async function onCallback(cb, env) {
   }
   if (data.startsWith('TKT:CAT:')) {
     const cat = decodeURIComponent(data.split(':')[2]);
-    await setSession(env, uid, { awaiting: `ticket:new:subject:${btoa(encodeURIComponent(JSON.stringify({ category: cat })) )}` });
+    await setSession(env, uid, { awaiting: `ticket:new:desc:${btoa(encodeURIComponent(JSON.stringify({ category: cat })) )}` });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    await tgApi('sendMessage', { chat_id: chatId, text: `دسته انتخاب شد: ${cat}\nاکنون موضوع تیکت را وارد کنید:` });
+    await tgApi('sendMessage', { chat_id: chatId, text: `دسته انتخاب شد: ${cat}\nاکنون شرح تیکت را وارد کنید:` });
+    return;
+  }
+  if (data.startsWith('TKT:SUBMIT:')) {
+    const payload = data.split(':')[2];
+    let obj = null;
+    try { obj = JSON.parse(decodeURIComponent(atob(payload))); } catch (_) {}
+    if (!obj || !obj.category || !obj.desc) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); return; }
+    const userKey = `user:${uid}`;
+    const u = (await kvGetJson(env, userKey)) || { id: uid };
+    const created = await createTicket(env, {
+      user_id: uid,
+      username: u.username || null,
+      category: obj.category,
+      subject: '-',
+      desc: obj.desc
+    });
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await tgApi('sendMessage', { chat_id: chatId, text: `✅ تیکت شما ثبت شد. شناسه: #${created.id}` });
+    try {
+      const admins = await getAdminIds(env);
+      const notice = `🧾 تیکت جدید #${created.id} از ${uid}${u.username ? ` (@${u.username})` : ''}\nدسته: ${created.category}`;
+      for (const aid of admins) { try { await tgApi('sendMessage', { chat_id: aid, text: notice }); } catch (_) {} }
+    } catch (_) {}
     return;
   }
   if (data === 'TICKET:MY') {
@@ -2427,6 +2463,12 @@ async function onCallback(cb, env) {
     if (t) { t.status = t.status === 'closed' ? 'open' : 'closed'; await putTicket(env, t); }
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'بروزرسانی شد' });
     await tgApi('sendMessage', { chat_id: chatId, text: `وضعیت تیکت #${id}: ${t?.status || '-'}` });
+    // notify the ticket owner if closed
+    try {
+      if (t && t.status === 'closed') {
+        await tgApi('sendMessage', { chat_id: t.user_id, text: `📪 تیکت شما (#${t.id}) بسته شد. اگر نیاز به ادامه دارید، می‌توانید تیکت جدیدی ثبت کنید.` });
+      }
+    } catch (_) {}
     return;
   }
   if (data.startsWith('ATK:BLK:') && isAdmin(uid)) {
