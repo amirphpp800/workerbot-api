@@ -1734,7 +1734,7 @@ async function onCallback(cb, env) {
     return;
   }
   if (data.startsWith('BAL:CONFIRM:')) {
-    const [, toIdStr, amountStr] = data.split(':');
+    const [, , toIdStr, amountStr] = data.split(':');
     const toId = Number(toIdStr);
     const amount = Math.floor(Number(amountStr));
     if (!Number.isFinite(toId) || !Number.isFinite(amount)) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); } catch (_) {} return; }
@@ -1745,9 +1745,14 @@ async function onCallback(cb, env) {
     const toUser = (await kvGetJson(env, toKey)) || { id: toId, diamonds: 0 };
     if (toId === uid) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); } catch (_) {} return; }
     if ((fromUser.diamonds || 0) < amount) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'الماس کافی نیست' }); } catch (_) {} return; }
-    // apply transfer with basic id existence check
+    // ensure destination exists in index; if not, create entry lazily
     const usersIndex = (await kvGetJson(env, 'index:users')) || [];
-    if (!usersIndex.includes(toId)) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'کاربر مقصد یافت نشد' }); } catch (_) {} return; }
+    if (!usersIndex.includes(toId)) {
+      usersIndex.push(toId);
+      await kvPutJson(env, 'index:users', usersIndex);
+      const existing = await kvGetJson(env, toKey);
+      if (!existing) { await kvPutJson(env, toKey, toUser); }
+    }
     fromUser.diamonds = (fromUser.diamonds || 0) - amount;
     toUser.diamonds = (toUser.diamonds || 0) + amount;
     await kvPutJson(env, fromKey, fromUser);
