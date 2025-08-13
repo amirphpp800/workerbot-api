@@ -142,6 +142,15 @@ async function tgGet(path) {
   return fetch(`${TELEGRAM_API(token)}/${path}`).then(r => r.json());
 }
 
+// Upload helper for multipart/form-data requests (e.g., sendDocument with a file)
+async function tgUpload(method, formData) {
+  const token = requireTelegramToken();
+  return fetch(`${TELEGRAM_API(token)}/${method}`, {
+    method: 'POST',
+    body: formData
+  }).then(r => r.json());
+}
+
 // Bot info helpers
 async function getBotInfo(env) {
   const token = RUNTIME.tgToken || TELEGRAM_TOKEN;
@@ -1421,7 +1430,16 @@ async function onCallback(cb, env) {
       const mainAdmin = adminIds && adminIds.length ? adminIds[0] : (MAIN_ADMIN_ID || uid);
       const content = JSON.stringify(backup, null, 2);
       await tgApi('sendMessage', { chat_id: mainAdmin, text: '📦 پشتیبان دیتابیس آماده شد. در حال ارسال...' });
-      await tgApi('sendDocument', { chat_id: mainAdmin, document: new Blob([content], { type: 'application/json' }), caption: `backup_${new Date().toISOString().slice(0,10)}.json` });
+      const filename = `backup_${new Date().toISOString().slice(0,10)}.json`;
+      const form = new FormData();
+      form.append('chat_id', String(mainAdmin));
+      form.append('caption', filename);
+      // Use Blob with filename for Telegram file upload
+      form.append('document', new Blob([content], { type: 'application/json' }), filename);
+      const res = await tgUpload('sendDocument', form);
+      if (!res || !res.ok) {
+        throw new Error('telegram_upload_failed');
+      }
     } catch (e) {
       await tgApi('sendMessage', { chat_id: chatId, text: '❌ خطا در تهیه پشتیبان.' });
     }
@@ -1455,7 +1473,7 @@ async function onCallback(cb, env) {
     return;
   }
   if (data === 'BUY_DIAMONDS') {
-    if (await isButtonDisabled(env, 'BUY_DIAMONDS')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'This button is disabled and under maintenance.' }); return; }
+    if (await isButtonDisabled(env, 'BUY_DIAMONDS')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش موقتاً غیرفعال است.' }); return; }
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const info = `💳 خرید الماس
 یک بسته را انتخاب کنید:`;
@@ -1599,14 +1617,14 @@ async function onCallback(cb, env) {
     return;
   }
   if (data === 'GET_BY_TOKEN') {
-    if (await isButtonDisabled(env, 'GET_BY_TOKEN')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'This button is disabled and under maintenance.' }); return; }
+    if (await isButtonDisabled(env, 'GET_BY_TOKEN')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش موقتاً غیرفعال است.' }); return; }
     await setSession(env, uid, { awaiting: 'get_by_token' });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await tgApi('sendMessage', { chat_id: chatId, text: 'توکن فایل را ارسال کنید:' });
     return;
   }
   if (data === 'SUB:REFERRAL') {
-    if (await isButtonDisabled(env, 'SUB:REFERRAL')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'This button is disabled and under maintenance.' }); return; }
+    if (await isButtonDisabled(env, 'SUB:REFERRAL')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش موقتاً غیرفعال است.' }); return; }
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const rows = [
       [{ text: 'دریافت لینک اختصاصی', callback_data: 'REFERRAL' }],
@@ -1617,7 +1635,7 @@ async function onCallback(cb, env) {
     return;
   }
   if (data === 'SUB:ACCOUNT') {
-    if (await isButtonDisabled(env, 'SUB:ACCOUNT')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'This button is disabled and under maintenance.' }); return; }
+    if (await isButtonDisabled(env, 'SUB:ACCOUNT')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش موقتاً غیرفعال است.' }); return; }
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     // Show profile directly without extra buttons
     const user = (await kvGetJson(env, `user:${uid}`)) || {};
@@ -1625,7 +1643,13 @@ async function onCallback(cb, env) {
     const missionsActive = (await kvGetJson(env, 'missions:index')) || [];
     const mText = missionsActive.length ? `\n\n📆 ماموریت‌های فعال: ${missionsActive.length}\n✅ پیشرفت شما: ${progress.completed||0}/${missionsActive.length}` : '';
     const text = `📊 پروفایل شما:\n\n👤 آی‌دی: ${uid}\n🏷 یوزرنیم: ${user.username||'-'}\n💎 الماس: ${user.diamonds||0}\n📈 معرفی‌ها: ${user.referrals||0}\n📅 عضویت: ${formatDate(user.created_at||0)}${mText}`;
-    await tgApi('sendMessage', { chat_id: chatId, text });
+    const reply_markup = { inline_keyboard: [
+      [{ text: '🧾 ثبت تیکت جدید', callback_data: 'TICKET:NEW' }],
+      [{ text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }],
+      [{ text: '💸 انتقال موجودی', callback_data: 'BAL:START' }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup });
     return;
   }
   
@@ -1714,6 +1738,7 @@ async function onCallback(cb, env) {
     return;
   }
   if (data === 'MISSIONS') {
+    if (await isButtonDisabled(env, 'MISSIONS')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش موقتاً غیرفعال است.' }); return; }
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const { text, reply_markup } = await buildMissionsView(env, uid);
     await tgApi('sendMessage', { chat_id: chatId, text, reply_markup });
@@ -1792,6 +1817,7 @@ async function onCallback(cb, env) {
     return;
   }
   if (data === 'LOTTERY') {
+    if (await isButtonDisabled(env, 'LOTTERY')) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش موقتاً غیرفعال است.' }); return; }
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const cfg = await getLotteryConfig(env);
     const enrolled = await isUserEnrolledToday(env, uid);
@@ -2404,8 +2430,15 @@ async function onCallback(cb, env) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const s = await getSettings(env);
     const map = s.disabled_buttons || {};
-    const keys = ['GET_BY_TOKEN','MISSIONS','LOTTERY','SUB:REFERRAL','SUB:ACCOUNT','BUY_DIAMONDS'];
-    const rows = keys.map(k => ([{ text: `${map[k] ? '🟢 فعال‌سازی' : '🔴 غیرفعال'} ${k}`, callback_data: `ADMIN:BTN_TOGGLE:${encodeURIComponent(k)}` }]));
+    const items = [
+      { key: 'GET_BY_TOKEN', label: labelFor(s.button_labels, 'get_by_token', '🔑 دریافت با توکن') },
+      { key: 'MISSIONS', label: labelFor(s.button_labels, 'missions', '📆 مأموریت‌ها') },
+      { key: 'LOTTERY', label: labelFor(s.button_labels, 'lottery', '🎟 قرعه‌کشی') },
+      { key: 'SUB:REFERRAL', label: '👥 زیرمجموعه گیری' },
+      { key: 'SUB:ACCOUNT', label: '👤 حساب کاربری' },
+      { key: 'BUY_DIAMONDS', label: labelFor(s.button_labels, 'buy_points', '💳 خرید الماس') }
+    ];
+    const rows = items.map(it => ([{ text: `${map[it.key] ? '🟢 فعال‌سازی' : '🔴 غیرفعال'} ${it.label}` , callback_data: `ADMIN:BTN_TOGGLE:${encodeURIComponent(it.key)}` }]));
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'ADMIN:SETTINGS' }]);
     await tgApi('sendMessage', { chat_id: chatId, text: '🚫 مدیریت دکمه‌ها:', reply_markup: { inline_keyboard: rows } });
     return;
@@ -2418,6 +2451,18 @@ async function onCallback(cb, env) {
     s.disabled_buttons = map;
     await setSettings(env, s);
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'به‌روزرسانی شد' });
+    // Refresh list view with human-friendly labels
+    const items = [
+      { key: 'GET_BY_TOKEN', label: labelFor(s.button_labels, 'get_by_token', '🔑 دریافت با توکن') },
+      { key: 'MISSIONS', label: labelFor(s.button_labels, 'missions', '📆 مأموریت‌ها') },
+      { key: 'LOTTERY', label: labelFor(s.button_labels, 'lottery', '🎟 قرعه‌کشی') },
+      { key: 'SUB:REFERRAL', label: '👥 زیرمجموعه گیری' },
+      { key: 'SUB:ACCOUNT', label: '👤 حساب کاربری' },
+      { key: 'BUY_DIAMONDS', label: labelFor(s.button_labels, 'buy_points', '💳 خرید الماس') }
+    ];
+    const rows = items.map(it => ([{ text: `${map[it.key] ? '🟢 فعال‌سازی' : '🔴 غیرفعال'} ${it.label}` , callback_data: `ADMIN:BTN_TOGGLE:${encodeURIComponent(it.key)}` }]));
+    rows.push([{ text: '⬅️ بازگشت', callback_data: 'ADMIN:SETTINGS' }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: '🚫 مدیریت دکمه‌ها:', reply_markup: { inline_keyboard: rows } });
     return;
   }
   if (data === 'ADMIN:SET:WELCOME' && isAdmin(uid)) {
