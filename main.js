@@ -951,13 +951,13 @@ async function onMessage(msg, env) {
     }
     if (session.awaiting?.startsWith('admin_create_gift:') && isAdmin(uid) && text) {
       const [, field, base] = session.awaiting.split(':');
-      const draft = base ? JSON.parse(atob(base)) : {};
+      const draft = base ? JSON.parse(decodeURIComponent(base)) : {};
       if (field === 'code') draft.code = text.trim();
       if (field === 'amount') draft.amount = Math.max(0, parseInt(text.trim(), 10) || 0);
       if (field === 'max') draft.max_uses = Math.max(1, parseInt(text.trim(), 10) || 1);
       const nextField = field === 'code' ? 'amount' : field === 'amount' ? 'max' : null;
       if (nextField) {
-        await setSession(env, uid, { awaiting: `admin_create_gift:${nextField}:${btoa(JSON.stringify(draft))}` });
+        await setSession(env, uid, { awaiting: `admin_create_gift:${nextField}:${encodeURIComponent(JSON.stringify(draft))}` });
         const prompt = nextField === 'amount' ? 'مبلغ الماس را وارد کنید:' : 'حداکثر تعداد استفاده کل را وارد کنید:';
         await tgApi('sendMessage', { chat_id: chatId, text: prompt });
       } else {
@@ -1047,21 +1047,21 @@ async function onMessage(msg, env) {
     // Missions create flow (title → reward → period)
     if (session.awaiting === 'mission_create:title' && isAdmin(uid) && text) {
       const draft = { title: text.trim() };
-      await setSession(env, uid, { awaiting: `mission_create:reward:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_create:reward:${encodeURIComponent(JSON.stringify(draft))}` });
       await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار الماس جایزه را ارسال کنید (عدد):' });
       return;
     }
     if (session.awaiting?.startsWith('mission_create:reward:') && isAdmin(uid) && text) {
-      const base = JSON.parse(atob(session.awaiting.split(':')[2]));
+      const base = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
       const reward = Number(text.trim());
       if (!Number.isFinite(reward) || reward <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
       base.reward = reward;
-      await setSession(env, uid, { awaiting: `mission_create:period:${btoa(JSON.stringify(base))}` });
+      await setSession(env, uid, { awaiting: `mission_create:period:${encodeURIComponent(JSON.stringify(base))}` });
       await tgApi('sendMessage', { chat_id: chatId, text: 'دوره را مشخص کنید: one|daily|weekly' });
       return;
     }
     if (session.awaiting?.startsWith('mission_create:period:') && isAdmin(uid) && text) {
-      const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+      const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
       const valid = ['one','daily','weekly'];
       const p = text.trim().toLowerCase();
       if (!valid.includes(p)) { await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار نامعتبر. one|daily|weekly' }); return; }
@@ -1075,22 +1075,22 @@ async function onMessage(msg, env) {
       const id = text.trim();
       const m = await kvGetJson(env, `mission:${id}`);
       if (!m) { await tgApi('sendMessage', { chat_id: chatId, text: 'شناسه نامعتبر.' }); return; }
-      await setSession(env, uid, { awaiting: `mission_edit:field:${btoa(JSON.stringify({ id }))}` });
+    await setSession(env, uid, { awaiting: `mission_edit:field:${encodeURIComponent(JSON.stringify({ id }))}` });
       await tgApi('sendMessage', { chat_id: chatId, text: 'کدام فیلد را می‌خواهید ویرایش کنید؟ title|reward|period', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
       return;
     }
     if (session.awaiting?.startsWith('mission_edit:field:') && isAdmin(uid) && text) {
-      const base = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const base = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
       const field = text.trim().toLowerCase();
       if (!['title','reward','period'].includes(field)) { await tgApi('sendMessage', { chat_id: chatId, text: 'فیلد نامعتبر.' }); return; }
-      await setSession(env, uid, { awaiting: `mission_edit:value:${field}:${btoa(JSON.stringify(base))}` });
+    await setSession(env, uid, { awaiting: `mission_edit:value:${field}:${encodeURIComponent(JSON.stringify(base))}` });
       await tgApi('sendMessage', { chat_id: chatId, text: `مقدار جدید برای ${field} را ارسال کنید:` });
       return;
     }
     if (session.awaiting?.startsWith('mission_edit:value:') && isAdmin(uid) && text) {
       const parts = session.awaiting.split(':');
       const field = parts[2];
-      const base = JSON.parse(atob(parts[3]));
+    const base = JSON.parse(decodeURIComponent(parts[3]));
       const key = `mission:${base.id}`;
       const m = await kvGetJson(env, key);
       if (!m) { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'شناسه نامعتبر.' }); return; }
@@ -1108,33 +1108,33 @@ async function onMessage(msg, env) {
     }
   // Quiz mission creation flow
   if (session.awaiting?.startsWith('mission_quiz:q:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     draft.question = text.trim().slice(0, 300);
-    await setSession(env, uid, { awaiting: `mission_quiz:opts:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_quiz:opts:${encodeURIComponent(JSON.stringify(draft))}` });
     await tgApi('sendMessage', { chat_id: chatId, text: 'گزینه‌ها را هر کدام در یک خط ارسال کنید (حداقل 2 گزینه):' });
     return;
   }
   if (session.awaiting?.startsWith('mission_quiz:opts:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     const options = String(text).split('\n').map(s => s.trim()).filter(Boolean).slice(0, 8);
     if (options.length < 2) { await tgApi('sendMessage', { chat_id: chatId, text: 'حداقل 2 گزینه لازم است.' }); return; }
     draft.options = options;
-    await setSession(env, uid, { awaiting: `mission_quiz:correct:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_quiz:correct:${encodeURIComponent(JSON.stringify(draft))}` });
     const optsList = options.map((o, i) => `${i+1}) ${o}`).join('\n');
     await tgApi('sendMessage', { chat_id: chatId, text: `شماره گزینه صحیح را ارسال کنید (1 تا ${options.length}):\n\n${optsList}` });
     return;
   }
   if (session.awaiting?.startsWith('mission_quiz:correct:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     const n = Number(String(text).trim());
     if (!Number.isFinite(n) || n < 1 || n > (draft.options?.length || 0)) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
     draft.correctIndex = n - 1;
-    await setSession(env, uid, { awaiting: `mission_quiz:reward:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_quiz:reward:${encodeURIComponent(JSON.stringify(draft))}` });
     await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار جایزه (الماس) را ارسال کنید:' });
     return;
   }
   if (session.awaiting?.startsWith('mission_quiz:reward:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     const reward = Number(text.trim());
     if (!Number.isFinite(reward) || reward <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
     draft.reward = reward;
@@ -1146,21 +1146,21 @@ async function onMessage(msg, env) {
   }
   // Weekly question/contest creation
   if (session.awaiting?.startsWith('mission_q:question:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     draft.question = text.trim().slice(0, 400);
-    await setSession(env, uid, { awaiting: `mission_q:answer:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_q:answer:${encodeURIComponent(JSON.stringify(draft))}` });
     await tgApi('sendMessage', { chat_id: chatId, text: 'پاسخ صحیح مسابقه را ارسال کنید:' });
     return;
   }
   if (session.awaiting?.startsWith('mission_q:answer:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     draft.answer = text.trim().slice(0, 200);
-    await setSession(env, uid, { awaiting: `mission_q:reward:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_q:reward:${encodeURIComponent(JSON.stringify(draft))}` });
     await tgApi('sendMessage', { chat_id: chatId, text: 'جایزه (الماس) را ارسال کنید:' });
     return;
   }
   if (session.awaiting?.startsWith('mission_q:reward:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     const reward = Number(text.trim());
     if (!Number.isFinite(reward) || reward <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
     draft.reward = reward;
@@ -1171,16 +1171,16 @@ async function onMessage(msg, env) {
   }
   // Invite mission creation
   if (session.awaiting?.startsWith('mission_inv:count:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     const needed = Number(text.trim());
     if (!Number.isFinite(needed) || needed <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
     draft.needed = needed;
-    await setSession(env, uid, { awaiting: `mission_inv:reward:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_inv:reward:${encodeURIComponent(JSON.stringify(draft))}` });
     await tgApi('sendMessage', { chat_id: chatId, text: 'جایزه (الماس) را ارسال کنید:' });
     return;
   }
   if (session.awaiting?.startsWith('mission_inv:reward:') && isAdmin(uid) && text) {
-    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     const reward = Number(text.trim());
     if (!Number.isFinite(reward) || reward <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
     draft.reward = reward;
@@ -1798,7 +1798,6 @@ ${lines.join('\n')}
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const rows = [
       [{ text: 'دریافت لینک اختصاصی', callback_data: 'REFERRAL' }],
-      [{ text: '🎁 کد هدیه', callback_data: 'REDEEM_GIFT' }],
       [{ text: '⬅️ بازگشت', callback_data: 'MENU' }]
     ];
     await tgApi('sendMessage', { chat_id: chatId, text: '👥 زیرمجموعه گیری:', reply_markup: { inline_keyboard: rows } });
@@ -2762,21 +2761,21 @@ ${lines.join('\n')}
   }
   if (data === 'ADMIN:MIS:CREATE:QUIZ' && isAdmin(uid)) {
     const draft = { type: 'quiz' };
-    await setSession(env, uid, { awaiting: `mission_quiz:q:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_quiz:q:${encodeURIComponent(JSON.stringify(draft))}` });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await tgApi('sendMessage', { chat_id: chatId, text: 'سوال کوتاه کوییز را ارسال کنید:' });
     return;
   }
   if (data === 'ADMIN:MIS:CREATE:QUESTION' && isAdmin(uid)) {
     const draft = { type: 'question' };
-    await setSession(env, uid, { awaiting: `mission_q:question:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_q:question:${encodeURIComponent(JSON.stringify(draft))}` });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await tgApi('sendMessage', { chat_id: chatId, text: 'سوال مسابقه هفتگی را ارسال کنید:' });
     return;
   }
   if (data === 'ADMIN:MIS:CREATE:INVITE' && isAdmin(uid)) {
     const draft = { type: 'invite' };
-    await setSession(env, uid, { awaiting: `mission_inv:count:${btoa(JSON.stringify(draft))}` });
+    await setSession(env, uid, { awaiting: `mission_inv:count:${encodeURIComponent(JSON.stringify(draft))}` });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await tgApi('sendMessage', { chat_id: chatId, text: 'تعداد دعوت مورد نیاز این هفته را وارد کنید (مثلاً 3):' });
     return;
