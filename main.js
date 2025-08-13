@@ -13,10 +13,32 @@ Features:
 
 Bindings required when deploying:
 - KV namespace binding named BOT_KV
+
+Sections (edit guide):
+1) Config & Runtime
+2) KV helpers
+3) Telegram helpers (API wrappers, multipart upload)
+4) Utility (time, formatting)
+5) Settings & Date helpers
+6) Session helpers
+7) Inline UI helpers (links, dynamic menus)
+8) HTTP entrypoints (fetch, routes)
+9) Telegram webhook handling (updates, callbacks)
+10) Features & flows:
+   - Main menu, Profile & Account
+   - Tickets, Balance Transfer
+   - Missions, Lottery
+   - File management, Gifts
+   - Admin panel & Settings (Disable Buttons)
+   - Backup (export)
+11) Storage helpers (tickets, missions, lottery, files, users)
+12) Public endpoints (backup, file download)
 */
 
-// --- Config (embedded defaults; overridden by env at runtime) ---
-// IMPORTANT: Do not hardcode secrets. Provide via env in production.
+/* ==================== 1) Config & Runtime (EDIT HERE) ==================== */
+// IMPORTANT: Set secrets in environment variables for production. The values
+// below are fallbacks to help local testing. Prefer configuring via `env`.
+// EDIT: TELEGRAM_TOKEN, ADMIN_IDS, ADMIN_KEY, WEBHOOK_URL, JOIN_CHAT
 const TELEGRAM_TOKEN = "";
 const ADMIN_IDS = []; // provide via env `ADMIN_IDS` (comma-separated)
 const ADMIN_KEY = ""; // provide via env `ADMIN_KEY`
@@ -33,13 +55,15 @@ let RUNTIME = {
   joinChat: null,
 };
 
-// Main admin and payments config
+// Main admin and payments config (EDIT: customize display name and packages)
 const MAIN_ADMIN_ID = (Array.isArray(ADMIN_IDS) && ADMIN_IDS.length ? ADMIN_IDS : [])[0];
 const MAIN_ADMIN_USERNAME = 'minimalcraft'; // for display only
+// EDIT: Payment packages (diamonds and prices)
 const DIAMOND_PACKAGES = [
   { id: 'd25', diamonds: 25, price_toman: 35000 },
   { id: 'd15', diamonds: 15, price_toman: 25000 }
 ];
+// EDIT: Bank/card details for manual payments
 const BANK_CARD_NUMBER = '6219 8619 4308 4037';
 const BANK_CARD_NAME = 'امیرحسین سیاهبالائی';
 
@@ -53,6 +77,7 @@ const TELEGRAM_FILE_API = (token) => `https://api.telegram.org/file/bot${token}`
 // dynamic admins cache (refreshed per webhook)
 let DYNAMIC_ADMIN_IDS = [];
 
+/* ==================== 8) HTTP Entrypoint (router) ==================== */
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -97,7 +122,7 @@ export default {
   }
 };
 
-/* -------------------- KV helpers -------------------- */
+/* ==================== 2) KV helpers ==================== */
 async function kvGetJson(env, key) {
   const v = await env.BOT_KV.get(key);
   return v ? JSON.parse(v) : null;
@@ -109,7 +134,7 @@ async function kvDelete(env, key) {
   try { return await env.BOT_KV.delete(key); } catch (_) { return; }
 }
 
-/* -------------------- Telegram helpers -------------------- */
+/* ==================== 3) Telegram helpers ==================== */
 function populateRuntimeFromEnv(env) {
   RUNTIME.tgToken = env?.TELEGRAM_TOKEN || TELEGRAM_TOKEN || '';
   RUNTIME.webhookUrl = env?.WEBHOOK_URL || WEBHOOK_URL || '';
@@ -188,7 +213,7 @@ async function tgGetWebhookInfo() {
   } catch (_) { return null; }
 }
 
-/* -------------------- Utility -------------------- */
+/* ==================== 4) Utility ==================== */
 function makeToken(len = 20) {
   const bytes = crypto.getRandomValues(new Uint8Array(len));
   return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, '').slice(0, len);
@@ -207,7 +232,7 @@ function formatFileSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-/* -------------------- Settings & Date helpers -------------------- */
+/* ==================== 5) Settings & Date helpers ==================== */
 let SETTINGS_MEMO = null;
 let SETTINGS_MEMO_AT = 0;
 async function getSettings(env) {
@@ -279,7 +304,7 @@ async function checkRateLimit(env, uid, action, maxOps, windowMs) {
   } catch (_) { return true; }
 }
 
-/* -------------------- Session helpers -------------------- */
+/* ==================== 6) Session helpers ==================== */
 async function getSession(env, uid) {
   return (await kvGetJson(env, `session:${uid}`)) || {};
 }
@@ -287,7 +312,7 @@ async function setSession(env, uid, session) {
   return kvPutJson(env, `session:${uid}`, session || {});
 }
 
-/* -------------------- Inline UI helpers -------------------- */
+/* ==================== 7) Inline UI helpers ==================== */
 function domainFromWebhook() {
   const w = RUNTIME.webhookUrl || WEBHOOK_URL;
   if (!w) return '';
@@ -484,7 +509,7 @@ async function sendMainMenu(env, chatId, uid) {
   });
 }
 
-/* -------------------- Webhook handler -------------------- */
+/* ==================== 9) Telegram webhook handling ==================== */
 async function handleTelegramWebhook(req, env) {
   let body;
   try { body = await req.json(); } catch (e) { return new Response('invalid json', { status: 400 }); }
@@ -543,19 +568,24 @@ async function onMessage(msg, env) {
   // session-driven flows
   const session = await getSession(env, uid);
   if (session.awaiting) {
-    // Answering a quiz mission
+    // Answering a quiz mission (legacy text-answer). One attempt only.
     if (session.awaiting?.startsWith('mis_quiz_answer:') && text) {
       const id = session.awaiting.split(':')[1];
       const m = await kvGetJson(env, `mission:${id}`);
-      await setSession(env, uid, {});
-      if (!m || !m.enabled || m.type !== 'quiz') { await tgApi('sendMessage', { chat_id: chatId, text: 'ماموریت یافت نشد.' }); return; }
+      if (!m || !m.enabled || m.type !== 'quiz') { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'ماموریت یافت نشد.' }); return; }
+      const prog = await getUserMissionProgress(env, uid);
+      const markKey = `${m.id}:${weekKey()}`;
+      if ((prog.map||{})[markKey]) { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'قبلاً پاسخ داده‌اید.' }); return; }
       const correct = String(m.config?.answer || '').trim().toLowerCase();
       const userAns = text.trim().toLowerCase();
       if (correct && userAns === correct) {
-        const ok = await completeMissionIfEligible(env, uid, m);
-        await tgApi('sendMessage', { chat_id: chatId, text: ok ? `✅ درست جواب دادید! ${m.reward} الماس دریافت کردید.` : 'این ماموریت را قبلاً تکمیل کرده‌اید.' });
+        await completeMissionIfEligible(env, uid, m);
+        await setSession(env, uid, {});
+        await tgApi('sendMessage', { chat_id: chatId, text: `✅ درست جواب دادید! ${m.reward} الماس دریافت کردید.` });
       } else {
-        await tgApi('sendMessage', { chat_id: chatId, text: '❌ پاسخ نادرست است.' });
+        prog.map = prog.map || {}; prog.map[markKey] = now(); await setUserMissionProgress(env, uid, prog);
+        await setSession(env, uid, {});
+        await tgApi('sendMessage', { chat_id: chatId, text: '❌ پاسخ نادرست است. امکان پاسخ مجدد وجود ندارد.' });
       }
       return;
     }
@@ -563,15 +593,20 @@ async function onMessage(msg, env) {
     if (session.awaiting?.startsWith('mis_question_answer:') && text) {
       const id = session.awaiting.split(':')[1];
       const m = await kvGetJson(env, `mission:${id}`);
-      await setSession(env, uid, {});
-      if (!m || !m.enabled || m.type !== 'question') { await tgApi('sendMessage', { chat_id: chatId, text: 'ماموریت یافت نشد.' }); return; }
+      if (!m || !m.enabled || m.type !== 'question') { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'ماموریت یافت نشد.' }); return; }
+      const prog = await getUserMissionProgress(env, uid);
+      const markKey = `${m.id}:${weekKey()}`;
+      if ((prog.map||{})[markKey]) { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'قبلاً پاسخ داده‌اید.' }); return; }
       const correct = String(m.config?.answer || '').trim().toLowerCase();
       const userAns = text.trim().toLowerCase();
       if (correct && userAns === correct) {
-        const ok = await completeMissionIfEligible(env, uid, m);
-        await tgApi('sendMessage', { chat_id: chatId, text: ok ? `🏆 پاسخ صحیح! ${m.reward} الماس دریافت کردید.` : 'این ماموریت را قبلاً تکمیل کرده‌اید.' });
+        await completeMissionIfEligible(env, uid, m);
+        await setSession(env, uid, {});
+        await tgApi('sendMessage', { chat_id: chatId, text: `🏆 پاسخ صحیح! ${m.reward} الماس دریافت کردید.` });
       } else {
-        await tgApi('sendMessage', { chat_id: chatId, text: '❌ پاسخ نادرست است.' });
+        prog.map = prog.map || {}; prog.map[markKey] = now(); await setUserMissionProgress(env, uid, prog);
+        await setSession(env, uid, {});
+        await tgApi('sendMessage', { chat_id: chatId, text: '❌ پاسخ نادرست است. امکان پاسخ مجدد وجود ندارد.' });
       }
       return;
     }
@@ -1042,13 +1077,25 @@ async function onMessage(msg, env) {
   if (session.awaiting?.startsWith('mission_quiz:q:') && isAdmin(uid) && text) {
     const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
     draft.question = text.trim().slice(0, 300);
-    await setSession(env, uid, { awaiting: `mission_quiz:answer:${btoa(JSON.stringify(draft))}` });
-    await tgApi('sendMessage', { chat_id: chatId, text: 'پاسخ صحیح کوییز را ارسال کنید:' });
+    await setSession(env, uid, { awaiting: `mission_quiz:opts:${btoa(JSON.stringify(draft))}` });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'گزینه‌ها را هر کدام در یک خط ارسال کنید (حداقل 2 گزینه):' });
     return;
   }
-  if (session.awaiting?.startsWith('mission_quiz:answer:') && isAdmin(uid) && text) {
+  if (session.awaiting?.startsWith('mission_quiz:opts:') && isAdmin(uid) && text) {
     const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
-    draft.answer = text.trim().slice(0, 120);
+    const options = String(text).split('\n').map(s => s.trim()).filter(Boolean).slice(0, 8);
+    if (options.length < 2) { await tgApi('sendMessage', { chat_id: chatId, text: 'حداقل 2 گزینه لازم است.' }); return; }
+    draft.options = options;
+    await setSession(env, uid, { awaiting: `mission_quiz:correct:${btoa(JSON.stringify(draft))}` });
+    const optsList = options.map((o, i) => `${i+1}) ${o}`).join('\n');
+    await tgApi('sendMessage', { chat_id: chatId, text: `شماره گزینه صحیح را ارسال کنید (1 تا ${options.length}):\n\n${optsList}` });
+    return;
+  }
+  if (session.awaiting?.startsWith('mission_quiz:correct:') && isAdmin(uid) && text) {
+    const draft = JSON.parse(atob(session.awaiting.split(':')[2]));
+    const n = Number(String(text).trim());
+    if (!Number.isFinite(n) || n < 1 || n > (draft.options?.length || 0)) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
+    draft.correctIndex = n - 1;
     await setSession(env, uid, { awaiting: `mission_quiz:reward:${btoa(JSON.stringify(draft))}` });
     await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار جایزه (الماس) را ارسال کنید:' });
     return;
@@ -1059,7 +1106,7 @@ async function onMessage(msg, env) {
     if (!Number.isFinite(reward) || reward <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
     draft.reward = reward;
     draft.period = 'weekly';
-    const created = await createMission(env, { title: `کوییز: ${draft.question.slice(0, 20)}...`, reward: draft.reward, period: 'weekly', type: 'quiz', config: { question: draft.question, answer: draft.answer } });
+    const created = await createMission(env, { title: `کوییز: ${draft.question.slice(0, 20)}...`, reward: draft.reward, period: 'weekly', type: 'quiz', config: { question: draft.question, options: draft.options, correctIndex: draft.correctIndex } });
     await setSession(env, uid, {});
     await tgApi('sendMessage', { chat_id: chatId, text: created.ok ? `✅ کوییز ایجاد شد (id=${created.id})` : 'خطا در ایجاد کوییز' });
     return;
@@ -1644,8 +1691,10 @@ async function onCallback(cb, env) {
     const mText = missionsActive.length ? `\n\n📆 ماموریت‌های فعال: ${missionsActive.length}\n✅ پیشرفت شما: ${progress.completed||0}/${missionsActive.length}` : '';
     const text = `📊 پروفایل شما:\n\n👤 آی‌دی: ${uid}\n🏷 یوزرنیم: ${user.username||'-'}\n💎 الماس: ${user.diamonds||0}\n📈 معرفی‌ها: ${user.referrals||0}\n📅 عضویت: ${formatDate(user.created_at||0)}${mText}`;
     const reply_markup = { inline_keyboard: [
-      [{ text: '🧾 ثبت تیکت جدید', callback_data: 'TICKET:NEW' }],
-      [{ text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }],
+      [
+        { text: '🧾 ثبت تیکت جدید', callback_data: 'TICKET:NEW' },
+        { text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }
+      ],
       [{ text: '💸 انتقال موجودی', callback_data: 'BAL:START' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
@@ -1765,9 +1814,45 @@ async function onCallback(cb, env) {
     const id = data.split(':')[2];
     const m = await kvGetJson(env, `mission:${id}`);
     if (!m || !m.enabled || m.type !== 'quiz') { await tgApi('sendMessage', { chat_id: chatId, text: 'ماموریت یافت نشد.' }); return; }
+    const prog = await getUserMissionProgress(env, uid);
+    const markKey = `${m.id}:${weekKey()}`; // weekly quiz default
+    if ((prog.map||{})[markKey]) { await tgApi('sendMessage', { chat_id: chatId, text: 'شما قبلاً به این کوییز پاسخ داده‌اید.' }); return; }
     const q = m.config?.question || '-';
-    await setSession(env, uid, { awaiting: `mis_quiz_answer:${id}` });
-    await tgApi('sendMessage', { chat_id: chatId, text: `🎮 کوییز هفتگی:\n${q}\n\nپاسخ خود را ارسال کنید:`, reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    const options = Array.isArray(m.config?.options) ? m.config.options : [];
+    const note = 'توجه: هر کاربر فقط یک بار می‌تواند پاسخ دهد.';
+    if (options.length >= 2) {
+      const rows = options.map((opt, idx) => ([{ text: opt, callback_data: `MIS:QUIZ_ANS:${m.id}:${idx}` }]));
+      rows.push([{ text: '❌ انصراف', callback_data: 'CANCEL' }]);
+      await tgApi('sendMessage', { chat_id: chatId, text: `🎮 کوییز هفتگی:\n${q}\n\n${note}`, reply_markup: { inline_keyboard: rows } });
+    } else {
+      await setSession(env, uid, { awaiting: `mis_quiz_answer:${id}` });
+      await tgApi('sendMessage', { chat_id: chatId, text: `🎮 کوییز هفتگی:\n${q}\n\n${note}\nپاسخ خود را ارسال کنید:`, reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    }
+    return;
+  }
+  if (data.startsWith('MIS:QUIZ_ANS:')) {
+    const [, , id, idxStr] = data.split(':');
+    const m = await kvGetJson(env, `mission:${id}`);
+    if (!m || !m.enabled || m.type !== 'quiz') { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); return; }
+    const idx = Number(idxStr);
+    const options = Array.isArray(m.config?.options) ? m.config.options : [];
+    if (!Number.isFinite(idx) || idx < 0 || idx >= options.length) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); return; }
+    const prog = await getUserMissionProgress(env, uid);
+    const markKey = `${m.id}:${weekKey()}`; // weekly quiz
+    if ((prog.map||{})[markKey]) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'قبلاً پاسخ داده‌اید' }); return; }
+    const ok = idx === Number(m.config?.correctIndex || -1);
+    if (ok) {
+      await completeMissionIfEligible(env, uid, m);
+      await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: '✅ صحیح' });
+      await tgApi('sendMessage', { chat_id: chatId, text: '✅ پاسخ صحیح بود و جایزه برای شما منظور شد.' });
+    } else {
+      // mark attempt without reward
+      prog.map = prog.map || {};
+      prog.map[markKey] = now();
+      await setUserMissionProgress(env, uid, prog);
+      await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: '❌ نادرست' });
+      await tgApi('sendMessage', { chat_id: chatId, text: '❌ پاسخ شما نادرست بود. امکان پاسخ مجدد وجود ندارد.' });
+    }
     return;
   }
   if (data.startsWith('MIS:Q:')) {
@@ -3799,7 +3884,12 @@ function escapeHtml(s) {
 
 /* -------------------- Tickets storage & helpers -------------------- */
 async function ticketsIndexKey() { return 'tickets:index'; }
-function newTicketId() { return `t_${makeToken(10)}`; }
+function newTicketId() {
+  // Simple, readable ticket id: one letter + digits, e.g., p123456789
+  const prefix = 'p';
+  const digits = String(Math.floor(100000000 + Math.random() * 900000000)); // 9 digits
+  return `${prefix}${digits}`;
+}
 async function listTickets(env, { limit = 20 } = {}) {
   const idx = (await kvGetJson(env, await ticketsIndexKey())) || [];
   const res = [];
