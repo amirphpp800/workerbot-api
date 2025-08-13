@@ -120,6 +120,12 @@ export default {
     // 404
     return new Response('Not Found', { status: 404 });
   }
+  ,
+  // Daily cron handler (configure a Cron Trigger in Cloudflare dashboard)
+  async scheduled(controller, env, ctx) {
+    const run = runDailyTasks(env);
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(run); else await run;
+  }
 };
 
 /* ==================== 2) KV helpers ==================== */
@@ -1862,7 +1868,7 @@ async function onCallback(cb, env) {
     if (!m || !m.enabled || m.type !== 'question') { await tgApi('sendMessage', { chat_id: chatId, text: 'ماموریت یافت نشد.' }); return; }
     const q = m.config?.question || '-';
     await setSession(env, uid, { awaiting: `mis_question_answer:${id}` });
-    await tgApi('sendMessage', { chat_id: chatId, text: `❓ سوال هفتگی:\n${q}\n\nپاسخ خود را ارسال کنید:`, reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    await tgApi('sendMessage', { chat_id: chatId, text: `❓ سوال هفتگی:\n${q}\n\nتوجه: هر کاربر فقط یک بار می‌تواند پاسخ دهد.\nپاسخ خود را ارسال کنید:`, reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
     return;
   }
   if (data === 'WEEKLY_CHECKIN') {
@@ -4191,6 +4197,33 @@ async function runLotteryPickAndReward(env, dateKey) {
 async function getLotteryHistory(env, limit = 20) {
   const hist = (await kvGetJson(env, 'lottery:hist')) || [];
   return hist.slice(0, limit);
+}
+
+/* -------------------- Daily tasks (cron) -------------------- */
+async function runDailyTasks(env) {
+  try {
+    // 1) Automatic KV backup to main admin
+    const adminIds = await getAdminIds(env);
+    const mainAdmin = adminIds && adminIds.length ? adminIds[0] : null;
+    if (mainAdmin) {
+      const backup = await createKvBackup(env);
+      const content = JSON.stringify(backup, null, 2);
+      const filename = `backup_${new Date().toISOString().slice(0,10)}.json`;
+      const form = new FormData();
+      form.append('chat_id', String(mainAdmin));
+      form.append('caption', filename);
+      form.append('document', new Blob([content], { type: 'application/json' }), filename);
+      await tgUpload('sendDocument', form);
+    }
+  } catch (_) {}
+
+  try {
+    // 2) Lottery: pick and reward winners for yesterday's pool (end-of-day draw)
+    const nowTs = now();
+    const yesterday = new Date(nowTs - 24*60*60*1000);
+    const yKey = dayKey(yesterday.getTime());
+    await runLotteryPickAndReward(env, yKey);
+  } catch (_) {}
 }
 
 /* -------------------- Gift codes -------------------- */
