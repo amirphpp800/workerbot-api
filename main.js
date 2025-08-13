@@ -869,7 +869,7 @@ async function onMessage(msg, env) {
           }
         }
       } catch (_) {}
-      await tgApi('sendMessage', { chat_id: chatId, text: '✅ رسید دریافت شد. نتیجه بررسی به شما اعلام می‌شود.' });
+      await tgApi('sendMessage', { chat_id: chatId, text: `✅ رسید دریافت شد.\nشناسه خرید: ${purchase.id}\nنتیجه بررسی به شما اعلام می‌شود.` });
       return;
     }
     if (session.awaiting === 'broadcast' && isAdmin(uid) && text) {
@@ -1583,6 +1583,7 @@ async function onCallback(cb, env) {
     const purchase = { id, user_id: uid, diamonds: pkg.diamonds, price_toman: pkg.price_toman, pkg_id: pkg.id, status: 'awaiting_receipt', created_at: now() };
     await kvPutJson(env, `purchase:${id}`, purchase);
     const txt = `✅ بسته انتخاب شد: ${pkg.diamonds} الماس (${pkg.price_toman.toLocaleString('fa-IR')} تومان)
+شناسه خرید شما: \`${id}\`
 لطفاً مبلغ را به کارت زیر واریز کنید و سپس روی «پرداخت کردم» بزنید:
 
 کارت:
@@ -1604,7 +1605,7 @@ async function onCallback(cb, env) {
       return;
     }
     await setSession(env, uid, { awaiting: `payment_receipt:${purchaseId}` });
-    await tgApi('sendMessage', { chat_id: chatId, text: 'لطفاً عکس رسید پرداخت را ارسال کنید.' });
+    await tgApi('sendMessage', { chat_id: chatId, text: `شناسه خرید شما: ${purchaseId}\nلطفاً عکس رسید پرداخت را ارسال کنید.` });
     return;
   }
   if (data === 'PAID_CONFIRM') {
