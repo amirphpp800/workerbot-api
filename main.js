@@ -374,7 +374,6 @@ function buildAdminPanelKeyboard() {
     { text: '📊 آمار', callback_data: 'ADMIN:STATS' }
   ]);
   rows.push([
-    { text: '🛑 تغییر وضعیت سرویس', callback_data: 'ADMIN:TOGGLE_SERVICE' },
     { text: '🛠 حالت آپدیت', callback_data: 'ADMIN:TOGGLE_UPDATE' }
   ]);
   rows.push([
@@ -657,7 +656,7 @@ async function onMessage(msg, env) {
     // Balance: get amount
     if (session.awaiting?.startsWith('bal:amount:') && text) {
       const toId = Number(session.awaiting.split(':')[2]);
-      const amount = Number(text.trim());
+      const amount = Math.floor(Number(text.trim()));
       if (!Number.isFinite(amount) || amount < 2 || amount > 50) { await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار نامعتبر. باید بین 2 تا 50 الماس باشد.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } }); return; }
       const fromUser = (await kvGetJson(env, `user:${uid}`)) || { id: uid, diamonds: 0 };
       if ((fromUser.diamonds || 0) < amount) { await tgApi('sendMessage', { chat_id: chatId, text: 'الماس کافی نیست.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } }); return; }
@@ -1163,19 +1162,38 @@ async function onMessage(msg, env) {
     return;
   }
 
-    // Lottery config
-    if (session.awaiting === 'lottery_config' && isAdmin(uid) && text) {
-      try {
-        const obj = JSON.parse(text);
-        const cfg = await getLotteryConfig(env);
-        cfg.winners = Number(obj.winners || cfg.winners || 0);
-        cfg.reward_diamonds = Number(obj.reward_diamonds || cfg.reward_diamonds || 0);
-        await setLotteryConfig(env, cfg);
-        await setSession(env, uid, {});
-        await tgApi('sendMessage', { chat_id: chatId, text: '✅ پیکربندی قرعه‌کشی ذخیره شد.' });
-      } catch (_) {
-        await tgApi('sendMessage', { chat_id: chatId, text: 'JSON نامعتبر.' });
-      }
+    // Lottery config (step-by-step)
+    if (isAdmin(uid) && session.awaiting === 'lottery_cfg:winners' && text) {
+      const winners = Math.floor(Number((text || '').trim()));
+      if (!Number.isFinite(winners) || winners <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد برندگان نامعتبر است. یک عدد صحیح مثبت وارد کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } }); return; }
+      const base = { winners };
+      await setSession(env, uid, { awaiting: `lottery_cfg:reward:${btoa(encodeURIComponent(JSON.stringify(base)))}` });
+      await tgApi('sendMessage', { chat_id: chatId, text: 'جایزه برای هر برنده (تعداد الماس) را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+      return;
+    }
+    if (isAdmin(uid) && session.awaiting?.startsWith('lottery_cfg:reward:') && text) {
+      const base64 = session.awaiting.split(':')[2];
+      const base = JSON.parse(decodeURIComponent(atob(base64)));
+      const reward = Math.floor(Number((text || '').trim()));
+      if (!Number.isFinite(reward) || reward <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد جایزه نامعتبر است. یک عدد صحیح مثبت وارد کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } }); return; }
+      base.reward_diamonds = reward;
+      await setSession(env, uid, { awaiting: `lottery_cfg:hours:${btoa(encodeURIComponent(JSON.stringify(base)))}` });
+      await tgApi('sendMessage', { chat_id: chatId, text: 'پس از چند ساعت قرعه‌کشی اجرا شود؟ (عدد صحیح، مثلا 24)', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+      return;
+    }
+    if (isAdmin(uid) && session.awaiting?.startsWith('lottery_cfg:hours:') && text) {
+      const base64 = session.awaiting.split(':')[2];
+      const base = JSON.parse(decodeURIComponent(atob(base64)));
+      const hours = Math.floor(Number((text || '').trim()));
+      if (!Number.isFinite(hours) || hours <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد ساعات نامعتبر است. یک عدد صحیح مثبت وارد کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } }); return; }
+      const cfg = await getLotteryConfig(env);
+      cfg.winners = Number(base.winners || cfg.winners || 0);
+      cfg.reward_diamonds = Number(base.reward_diamonds || cfg.reward_diamonds || 0);
+      cfg.run_every_hours = hours;
+      cfg.next_run_at = now() + (hours * 60 * 60 * 1000);
+      await setLotteryConfig(env, cfg);
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: '✅ پیکربندی قرعه‌کشی ذخیره شد.' });
       return;
     }
     if (session.awaiting === 'bulk_meta' && isAdmin(uid) && text) {
@@ -1711,30 +1729,30 @@ async function onCallback(cb, env) {
   // ===== Balance transfer flow (callbacks)
   if (data === 'BAL:START') {
     await setSession(env, uid, { awaiting: 'bal:to' });
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); } catch (_) {}
     await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی عددی گیرنده را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
     return;
   }
   if (data.startsWith('BAL:CONFIRM:')) {
     const [, toIdStr, amountStr] = data.split(':');
     const toId = Number(toIdStr);
-    const amount = Number(amountStr);
-    if (!Number.isFinite(toId) || !Number.isFinite(amount)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); return; }
-    if (amount < 2 || amount > 50) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'بازه انتقال 2 تا 50 الماس است' }); return; }
+    const amount = Math.floor(Number(amountStr));
+    if (!Number.isFinite(toId) || !Number.isFinite(amount)) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); } catch (_) {} return; }
+    if (amount < 2 || amount > 50) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'بازه انتقال 2 تا 50 الماس است' }); } catch (_) {} return; }
     const fromKey = `user:${uid}`;
     const toKey = `user:${toId}`;
     const fromUser = (await kvGetJson(env, fromKey)) || { id: uid, diamonds: 0 };
     const toUser = (await kvGetJson(env, toKey)) || { id: toId, diamonds: 0 };
-    if (toId === uid) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); return; }
-    if ((fromUser.diamonds || 0) < amount) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'الماس کافی نیست' }); return; }
+    if (toId === uid) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'نامعتبر' }); } catch (_) {} return; }
+    if ((fromUser.diamonds || 0) < amount) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'الماس کافی نیست' }); } catch (_) {} return; }
     // apply transfer with basic id existence check
     const usersIndex = (await kvGetJson(env, 'index:users')) || [];
-    if (!usersIndex.includes(toId)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'کاربر مقصد یافت نشد' }); return; }
+    if (!usersIndex.includes(toId)) { try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'کاربر مقصد یافت نشد' }); } catch (_) {} return; }
     fromUser.diamonds = (fromUser.diamonds || 0) - amount;
     toUser.diamonds = (toUser.diamonds || 0) + amount;
     await kvPutJson(env, fromKey, fromUser);
     await kvPutJson(env, toKey, toUser);
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'انجام شد' });
+    try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'انجام شد' }); } catch (_) {}
     await tgApi('sendMessage', { chat_id: chatId, text: `✅ انتقال انجام شد. ${amount} الماس به کاربر ${toId} منتقل شد.` });
     try { await tgApi('sendMessage', { chat_id: toId, text: `💸 ${amount} الماس از سوی کاربر ${uid} به حساب شما واریز شد.` }); } catch(_) {}
     return;
@@ -1912,13 +1930,15 @@ async function onCallback(cb, env) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const cfg = await getLotteryConfig(env);
     const enrolled = await isUserEnrolledToday(env, uid);
+    const pool = (await kvGetJson(env, `lottery:pool:${dayKey()}`)) || [];
+    const poolCount = pool.length;
     const kbd = { inline_keyboard: [
       ...(cfg.enabled && !enrolled ? [[{ text: '✨ ثبت‌نام در قرعه‌کشی امروز', callback_data: 'LOTTERY:ENROLL' }]] : []),
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
     const txt = cfg.enabled
-    ? `🎟 قرعه‌کشی فعال است. برندگان: ${cfg.winners||0} | جایزه: ${cfg.reward_diamonds||0} الماس${enrolled ? '\nشما برای امروز ثبت‌نام کرده‌اید.' : ''}`
-      : '🎟 قرعه‌کشی در حال حاضر غیرفعال است.';
+    ? `🎟 قرعه‌کشی فعال است. برندگان: ${cfg.winners||0} | جایزه: ${cfg.reward_diamonds||0} الماس\n👥 ثبت‌نام امروز: ${poolCount} نفر${enrolled ? '\nشما برای امروز ثبت‌نام کرده‌اید.' : ''}`
+      : `🎟 قرعه‌کشی در حال حاضر غیرفعال است.\n👥 ثبت‌نام امروز: ${poolCount} نفر`;
     await tgApi('sendMessage', { chat_id: chatId, text: txt, reply_markup: kbd });
     return;
   }
@@ -2217,13 +2237,7 @@ async function onCallback(cb, env) {
     await tgApi('sendMessage', { chat_id: chatId, text: `حالت آپدیت: ${!current ? 'فعال' : 'غیرفعال'}` });
     return;
   }
-  if (data === 'ADMIN:TOGGLE_SERVICE' && isAdmin(uid)) {
-    const current = (await kvGetJson(env, 'bot:enabled')) ?? true;
-    await kvPutJson(env, 'bot:enabled', !current);
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: !current ? 'فعال شد' : 'غیرفعال شد' });
-    await tgApi('sendMessage', { chat_id: chatId, text: `وضعیت سرویس: ${!current ? 'فعال' : 'غیرفعال'}` });
-    return;
-  }
+  // Removed ADMIN:TOGGLE_SERVICE per request
   if (data === 'ADMIN:BROADCAST' && isAdmin(uid)) {
     await setSession(env, uid, { awaiting: 'broadcast' });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
@@ -2668,9 +2682,11 @@ async function onCallback(cb, env) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const cfg = await getLotteryConfig(env);
     const enabled = cfg.enabled ? 'فعال' : 'غیرفعال';
-    await tgApi('sendMessage', { chat_id: chatId, text: `🎟 قرعه‌کشی: ${enabled}\nبرندگان هر دوره: ${cfg.winners||0}\nجایزه: ${cfg.reward_diamonds||0} الماس`, reply_markup: { inline_keyboard: [
+    const scheduleInfo = cfg.run_every_hours ? `\nبازه اجرا: هر ${cfg.run_every_hours} ساعت` : '';
+    await tgApi('sendMessage', { chat_id: chatId, text: `🎟 قرعه‌کشی: ${enabled}\nبرندگان هر دوره: ${cfg.winners||0}\nجایزه: ${cfg.reward_diamonds||0} الماس${scheduleInfo}`, reply_markup: { inline_keyboard: [
       [{ text: cfg.enabled ? '🔴 غیرفعال‌سازی' : '🟢 فعال‌سازی', callback_data: 'ADMIN:LOT:TOGGLE' }],
       [{ text: '✏️ تنظیم مقادیر', callback_data: 'ADMIN:LOT:CONFIG' }],
+      [{ text: '▶️ Start', callback_data: 'ADMIN:LOT:RUN_NOW' }],
       [{ text: '📜 تاریخچه', callback_data: 'ADMIN:LOT:HISTORY' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] } });
@@ -2684,9 +2700,20 @@ async function onCallback(cb, env) {
     return;
   }
   if (data === 'ADMIN:LOT:CONFIG' && isAdmin(uid)) {
-    await setSession(env, uid, { awaiting: 'lottery_config' });
+    await setSession(env, uid, { awaiting: 'lottery_cfg:winners' });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    await tgApi('sendMessage', { chat_id: chatId, text: 'پیکربندی را به صورت JSON ارسال کنید. مثال: {"winners":3,"reward_diamonds":5}' });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'تعداد برندگان را وارد کنید (عدد صحیح مثبت):', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  if (data === 'ADMIN:LOT:RUN_NOW' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const dateKey = dayKey();
+    const res = await runLotteryPickAndReward(env, dateKey);
+    if (res.ok && res.winners && res.winners.length) {
+      await tgApi('sendMessage', { chat_id: chatId, text: `✅ قرعه‌کشی اجرا شد. برندگان امروز (${dateKey}):\n${res.winners.map(w => `• ${w}`).join('\n')}` });
+    } else {
+      await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ قرعه‌کشی اجرا نشد (احتمالاً غیرفعال است یا شرکت‌کننده‌ای وجود ندارد).' });
+    }
     return;
   }
   if (data === 'ADMIN:LOT:HISTORY' && isAdmin(uid)) {
@@ -4151,7 +4178,7 @@ async function buildMissionsView(env, uid) {
 
 /* -------------------- Lottery helpers -------------------- */
 async function getLotteryConfig(env) {
-  return (await kvGetJson(env, 'lottery:cfg')) || { enabled: false, winners: 0, reward_diamonds: 0 };
+  return (await kvGetJson(env, 'lottery:cfg')) || { enabled: false, winners: 0, reward_diamonds: 0, run_every_hours: 0, next_run_at: 0 };
 }
 async function setLotteryConfig(env, cfg) { await kvPutJson(env, 'lottery:cfg', cfg || {}); }
 async function lotteryAutoEnroll(env, uid) {
