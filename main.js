@@ -60,8 +60,10 @@ const MAIN_ADMIN_ID = (Array.isArray(ADMIN_IDS) && ADMIN_IDS.length ? ADMIN_IDS 
 const MAIN_ADMIN_USERNAME = 'minimalcraft'; // for display only
 // EDIT: Payment packages (diamonds and prices)
 const DIAMOND_PACKAGES = [
+  { id: 'd10', diamonds: 10, price_toman: 15000 },
+  { id: 'd15', diamonds: 15, price_toman: 25000 },
   { id: 'd25', diamonds: 25, price_toman: 35000 },
-  { id: 'd15', diamonds: 15, price_toman: 25000 }
+  { id: 'd35', diamonds: 35, price_toman: 45000 }
 ];
 // EDIT: Bank/card details for manual payments
 const BANK_CARD_NUMBER = '6219 8619 4308 4037';
@@ -1991,7 +1993,7 @@ ${lines.join('\n')}
     const prog = await getUserMissionProgress(env, uid);
     const markKey = `${m.id}:${weekKey()}`; // weekly quiz
     if ((prog.map||{})[markKey]) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'قبلاً پاسخ داده‌اید' }); return; }
-    const ok = idx === Number(m.config?.correctIndex || -1);
+    const ok = idx === Number((m.config?.correctIndex ?? -1));
     if (ok) {
       await completeMissionIfEligible(env, uid, m);
       await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: '✅ صحیح' });
@@ -3266,6 +3268,10 @@ async function handleMainPage(req, env, url, ctx) {
   const connected = typeof lastWebhookAt === 'number' && (now() - lastWebhookAt) < 5 * 60 * 1000;
 
   const updateMode = (await kvGetJson(env, 'bot:update_mode')) || false;
+  // Admin insights (computed only when authenticated)
+  const topPurchasers = isAuthenticated ? await computeTopPurchasers(env, 5) : [];
+  const topReferrers = isAuthenticated ? await computeTopReferrers(env, 5) : [];
+  const overallStats = isAuthenticated ? await computeOverallStats(env) : null;
   const html = `<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -3754,6 +3760,95 @@ async function handleMainPage(req, env, url, ctx) {
                     <button class="btn" type="submit">ارسال</button>
                   </div>
                 </form>
+              </div>
+            </div>
+
+            <div class="data-table">
+              <div class="table-header">💰 خریداران برتر (Top Purchasers)</div>
+              <div class="table-content">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>رتبه</th>
+                      <th>آی‌دی کاربر</th>
+                      <th>یوزرنیم</th>
+                      <th>تعداد خرید تایید شده</th>
+                      <th>کل الماس خریداری‌شده</th>
+                      <th>مبلغ کل (تومان)</th>
+                      <th>آخرین خرید</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${topPurchasers.map((it, i) => `
+                      <tr>
+                        <td>${i+1}</td>
+                        <td><code>${it.user_id}</code></td>
+                        <td>${escapeHtml(it.username || '-')}</td>
+                        <td>${(it.count||0).toLocaleString('fa-IR')}</td>
+                        <td>${(it.diamonds||0).toLocaleString('fa-IR')}</td>
+                        <td>${(it.amount||0).toLocaleString('fa-IR')}</td>
+                        <td>${it.last_at ? new Date(it.last_at).toLocaleString('fa-IR') : '-'}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="data-table">
+              <div class="table-header">🏷 معرفین برتر (Top Referrers)</div>
+              <div class="table-content">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>رتبه</th>
+                      <th>آی‌دی کاربر</th>
+                      <th>یوزرنیم</th>
+                      <th>تعداد معرفی</th>
+                      <th>الماس فعلی</th>
+                      <th>تاریخ عضویت</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${topReferrers.map((it, i) => `
+                      <tr>
+                        <td>${i+1}</td>
+                        <td><code>${it.id}</code></td>
+                        <td>${escapeHtml(it.username || '-')}</td>
+                        <td>${(it.referrals||0).toLocaleString('fa-IR')}</td>
+                        <td>${(it.diamonds||0).toLocaleString('fa-IR')}</td>
+                        <td>${it.created_at ? new Date(it.created_at).toLocaleDateString('fa-IR') : '-'}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="data-table">
+              <div class="table-header">📊 آمار کلی کاربران (Overall Statistics)</div>
+              <div class="table-content">
+                ${overallStats ? `
+                <table>
+                  <thead>
+                    <tr>
+                      <th>شاخص</th>
+                      <th>مقدار</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>کل کاربران</td><td>${overallStats.total_users.toLocaleString('fa-IR')}</td></tr>
+                    <tr><td>کاربران مسدود</td><td>${overallStats.blocked_users.toLocaleString('fa-IR')}</td></tr>
+                    <tr><td>فعال در ۷ روز اخیر</td><td>${overallStats.active_7d.toLocaleString('fa-IR')}</td></tr>
+                    <tr><td>عضو شده در ۷ روز اخیر</td><td>${overallStats.joined_7d.toLocaleString('fa-IR')}</td></tr>
+                    <tr><td>کل الماس کاربران</td><td>${overallStats.total_diamonds.toLocaleString('fa-IR')}</td></tr>
+                    <tr><td>میانگین الماس به ازای هر کاربر</td><td>${overallStats.avg_diamonds.toLocaleString('fa-IR')}</td></tr>
+                    <tr><td>کل معرفی‌ها</td><td>${overallStats.total_referrals.toLocaleString('fa-IR')}</td></tr>
+                    <tr><td>تعداد خرید تایید شده</td><td>${overallStats.approved_purchases_count.toLocaleString('fa-IR')}</td></tr>
+                    <tr><td>مبلغ خریدهای تایید شده (تومان)</td><td>${overallStats.approved_purchases_amount.toLocaleString('fa-IR')}</td></tr>
+                  </tbody>
+                </table>
+                ` : ''}
               </div>
             </div>
         </div>
@@ -4359,6 +4454,90 @@ async function getLotteryHistory(env, limit = 20) {
   return hist.slice(0, limit);
 }
 
+/* -------------------- Aggregates for Admin Insights -------------------- */
+async function computeTopPurchasers(env, limit = 5) {
+  try {
+    const idx = (await kvGetJson(env, 'index:purchases')) || [];
+    const map = new Map();
+    for (const id of idx) {
+      const p = await kvGetJson(env, `purchase:${id}`);
+      if (!p || p.status !== 'approved') continue;
+      const key = String(p.user_id);
+      const acc = map.get(key) || { user_id: p.user_id, count: 0, diamonds: 0, amount: 0, last_at: 0 };
+      acc.count += 1;
+      acc.diamonds += Number(p.diamonds || 0);
+      acc.amount += Number(p.price_toman || 0);
+      acc.last_at = Math.max(acc.last_at || 0, Number(p.processed_at || p.updated_at || p.created_at || 0));
+      map.set(key, acc);
+    }
+    const all = Array.from(map.values());
+    // Enrich with username
+    for (const it of all) {
+      const u = (await kvGetJson(env, `user:${it.user_id}`)) || {};
+      it.username = u.username || '';
+    }
+    return all.sort((a, b) => (b.amount || 0) - (a.amount || 0)).slice(0, limit);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function computeTopReferrers(env, limit = 5) {
+  try {
+    const users = (await kvGetJson(env, 'index:users')) || [];
+    const list = [];
+    for (const uid of users) {
+      const u = (await kvGetJson(env, `user:${uid}`)) || { id: uid };
+      list.push({ id: uid, username: u.username || '', referrals: Number(u.referrals || 0), diamonds: Number(u.diamonds || 0), created_at: Number(u.created_at || 0) });
+    }
+    return list.sort((a, b) => (b.referrals || 0) - (a.referrals || 0)).slice(0, limit);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function computeOverallStats(env) {
+  try {
+    const users = (await kvGetJson(env, 'index:users')) || [];
+    const nowTs = now();
+    const weekMs = 7 * 24 * 60 * 60 * 1000;
+    let blocked = 0, active7 = 0, joined7 = 0, totalDiamonds = 0, totalReferrals = 0;
+    for (const uid of users) {
+      const u = (await kvGetJson(env, `user:${uid}`)) || {};
+      const isBlocked = await isUserBlocked(env, uid);
+      if (isBlocked) blocked++;
+      if (u.last_seen && (nowTs - Number(u.last_seen)) <= weekMs) active7++;
+      if (u.created_at && (nowTs - Number(u.created_at)) <= weekMs) joined7++;
+      totalDiamonds += Number(u.diamonds || 0);
+      totalReferrals += Number(u.referrals || 0);
+    }
+    // purchases aggregates
+    const idx = (await kvGetJson(env, 'index:purchases')) || [];
+    let apprCount = 0, apprAmount = 0;
+    for (const id of idx) {
+      const p = await kvGetJson(env, `purchase:${id}`);
+      if (p && p.status === 'approved') {
+        apprCount++;
+        apprAmount += Number(p.price_toman || 0);
+      }
+    }
+    const totalUsers = users.length;
+    const avgDiamonds = totalUsers ? (totalDiamonds / totalUsers) : 0;
+    return {
+      total_users: totalUsers,
+      blocked_users: blocked,
+      active_7d: active7,
+      joined_7d: joined7,
+      total_diamonds: Math.round(totalDiamonds),
+      avg_diamonds: Math.round(avgDiamonds),
+      total_referrals: Math.round(totalReferrals),
+      approved_purchases_count: apprCount,
+      approved_purchases_amount: Math.round(apprAmount)
+    };
+  } catch (_) {
+    return null;
+  }
+}
 /* -------------------- Daily tasks (cron) -------------------- */
 async function runDailyTasks(env) {
   try {
