@@ -4138,11 +4138,11 @@ async function handleMiniApp(env) {
   <title>Top Referrers</title>
   <style>
     :root {
-      --bg: #0f172a;
+      --bg: #1d1e1f;
       --bg-soft: #111827;
       --fg: #e5e7eb;
       --muted: #9ca3af;
-      --card: #11182780;
+      --card:rgb(31, 33, 35);
       --border: #33415580;
       --accent: #60a5fa;
       --accent2: #34d399;
