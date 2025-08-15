@@ -4147,17 +4147,7 @@ async function handleMiniApp(env) {
       --accent: #007AFF;
       --accent2: #0051D5;
 
-      color-scheme: light dark;
-    }
-    @media (prefers-color-scheme: light) {
-      :root {
-        --bg: #f8fafc;
-        --bg-soft: #f1f5f9;
-        --fg: #0f172a;
-        --muted: #475569;
-        --card: #ffffffcc;
-        --border: #e2e8f0;
-      }
+      color-scheme: dark;
     }
     * { box-sizing: border-box; }
     body {
@@ -4192,9 +4182,8 @@ async function handleMiniApp(env) {
     .subs { margin-inline-start: auto; color: var(--muted); font-size: .95rem; }
     .foot { padding: 16px 20px; color: var(--muted); font-size: .9rem; }
   </style>
-  <meta name="color-scheme" content="light dark" />
+  <meta name="color-scheme" content=" dark" />
   <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
 </head>
 <body>
   <div class="wrap">
@@ -4928,3 +4917,4 @@ async function ensureWebhookForRequest(env, req) {
 // Removed module-level network call to comply with Worker cold-start best practices
 
 /* End of enhanced worker */
+
