@@ -110,6 +110,11 @@ export default {
       return handleMainPage(request, env, url, ctx);
     }
 
+    // Mini app public page (Top Referrers) — GET
+    if (url.pathname === '/miniapp' && request.method === 'GET') {
+      return handleMiniApp(env);
+    }
+
     // File public link
     if (url.pathname.startsWith('/f/')) return handleFileDownload(request, env, url);
 
@@ -4101,6 +4106,118 @@ async function handleMainPage(req, env, url, ctx) {
       'Cache-Control': 'no-cache, no-store, must-revalidate'
     } 
   });
+}
+
+/* -------------------- Public Mini App: Top Referrers -------------------- */
+async function handleMiniApp(env) {
+  // Gather top 5 referrers by referrals; show names/usernames only (no numeric ids)
+  const users = (await kvGetJson(env, 'index:users')) || [];
+  const list = [];
+  for (const uid of users) {
+    const u = (await kvGetJson(env, `user:${uid}`)) || {};
+    list.push({
+      id: uid,
+      first_name: u.first_name || '',
+      username: u.username || '',
+      referrals: Number(u.referrals || 0)
+    });
+  }
+  const top = list
+    .sort((a, b) => (b.referrals || 0) - (a.referrals || 0))
+    .slice(0, 5)
+    .map(u => ({
+      name: (u.first_name || u.username || '').trim() || 'کاربر',
+      referrals: u.referrals || 0
+    }));
+
+  const html = `<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Top Referrers</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg-soft: #111827;
+      --fg: #e5e7eb;
+      --muted: #9ca3af;
+      --card: #11182780;
+      --border: #33415580;
+      --accent: #60a5fa;
+      --accent2: #34d399;
+      color-scheme: light dark;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --bg-soft: #f1f5f9;
+        --fg: #0f172a;
+        --muted: #475569;
+        --card: #ffffffcc;
+        --border: #e2e8f0;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: linear-gradient(135deg, var(--bg), var(--bg-soft));
+      color: var(--fg);
+      min-height: 100vh;
+      display: grid; place-items: center;
+    }
+    .wrap {
+      width: 100%; max-width: 720px; padding: 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      overflow: hidden;
+    }
+    .head {
+      padding: 20px 24px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .title { font-weight: 700; letter-spacing: .3px; }
+    .badge { font-size: .85rem; color: var(--muted); }
+    .list { padding: 8px 0; }
+    .row { display:flex; align-items:center; gap:12px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+    .row:last-child { border-bottom: none; }
+    .index { width: 36px; height: 36px; border-radius: 10px; display:grid; place-items:center; color:#fff; font-weight:700; background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+    .name { font-weight:600; }
+    .subs { margin-inline-start: auto; color: var(--muted); font-size: .95rem; }
+    .foot { padding: 16px 20px; color: var(--muted); font-size: .9rem; }
+  </style>
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <div class="title">🏷 معرفین برتر</div>
+        <div class="badge">Top Referrers</div>
+      </div>
+      <div class="list">
+        ${top.map((u, i) => `
+          <div class="row">
+            <div class="index">${i+1}</div>
+            <div class="name">${escapeHtml(u.name)}</div>
+            <div class="subs">${(u.referrals||0).toLocaleString('fa-IR')} معرفی</div>
+          </div>
+        `).join('') || '<div class="row"><div class="name">— داده‌ای یافت نشد —</div></div>'}
+      </div>
+      <div class="foot">فقط نام‌ها نمایش داده می‌شود. شناسه‌های عددی پنهان هستند.</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' } });
 }
 
 /* -------------------- API handlers for admin operations -------------------- */
