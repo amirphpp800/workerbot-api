@@ -4146,6 +4146,7 @@ async function handleMiniApp(env) {
       --border: #333333;
       --accent: #007AFF;
       --accent2: #0051D5;
+
       color-scheme: light dark;
     }
     @media (prefers-color-scheme: light) {
@@ -4199,7 +4200,7 @@ async function handleMiniApp(env) {
   <div class="wrap">
     <div class="card">
       <div class="head">
-        <div class="title">🏷 معرفین برتر</div>
+        <div class="title">🏷 نفرات برتر زیرمجموعه گیری تا این لحظه </div>
         <div class="badge">Top Referrers</div>
       </div>
       <div class="list">
@@ -4211,7 +4212,6 @@ async function handleMiniApp(env) {
           </div>
         `).join('') || '<div class="row"><div class="name">— داده‌ای یافت نشد —</div></div>'}
       </div>
-      <div class="foot">فقط نام‌ها نمایش داده می‌شود. شناسه‌های عددی پنهان هستند.</div>
     </div>
   </div>
 </body>
