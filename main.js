@@ -464,10 +464,17 @@ function buildCostKeyboard(token) {
   return {
     inline_keyboard: [
       [
-        { text: '0', callback_data: `COST_SET:${token}:0` },
         { text: '1', callback_data: `COST_SET:${token}:1` },
         { text: '2', callback_data: `COST_SET:${token}:2` },
-        { text: '5', callback_data: `COST_SET:${token}:5` },
+        { text: '3', callback_data: `COST_SET:${token}:3` },
+        { text: '4', callback_data: `COST_SET:${token}:4` },
+        { text: '5', callback_data: `COST_SET:${token}:5` }
+      ],
+      [
+        { text: '6', callback_data: `COST_SET:${token}:6` },
+        { text: '7', callback_data: `COST_SET:${token}:7` },
+        { text: '8', callback_data: `COST_SET:${token}:8` },
+        { text: '9', callback_data: `COST_SET:${token}:9` },
         { text: '10', callback_data: `COST_SET:${token}:10` }
       ],
       [
@@ -800,6 +807,8 @@ async function onMessage(msg, env) {
         ? `✅ متن ذخیره شد\nتوکن: ${created.token}`
         : `✅ آیتم ذخیره شد\nنام: ${created.name || created.type}\nتوکن: ${created.token}`;
       await tgApi('sendMessage', { chat_id: chatId, text: caption, reply_markup: manageKb });
+      // Prompt cost 1-10 right after upload
+      await tgApi('sendMessage', { chat_id: chatId, text: '💰 هزینه فایل را انتخاب کنید (۱ تا ۱۰):', reply_markup: buildCostKeyboard(created.token) });
       return;
     }
     // Admin upload categorized: text only
@@ -810,6 +819,7 @@ async function onMessage(msg, env) {
       if (!created) { await tgApi('sendMessage', { chat_id: chatId, text: 'ثبت متن ناموفق بود.' }); return; }
       const manageKb = buildFileManageKeyboard(created.token, created, true);
       await tgApi('sendMessage', { chat_id: chatId, text: `✅ متن ذخیره شد\nتوکن: ${created.token}`, reply_markup: manageKb });
+      await tgApi('sendMessage', { chat_id: chatId, text: '💰 هزینه فایل را انتخاب کنید (۱ تا ۱۰):', reply_markup: buildCostKeyboard(created.token) });
       return;
     }
     // Admin upload categorized: link
@@ -825,6 +835,7 @@ async function onMessage(msg, env) {
       if (!created) { await tgApi('sendMessage', { chat_id: chatId, text: 'ثبت لینک ناموفق بود.' }); return; }
       const manageKb = buildFileManageKeyboard(created.token, created, true);
       await tgApi('sendMessage', { chat_id: chatId, text: `✅ لینک ذخیره شد\nتوکن: ${created.token}`, reply_markup: manageKb });
+      await tgApi('sendMessage', { chat_id: chatId, text: '💰 هزینه فایل را انتخاب کنید (۱ تا ۱۰):', reply_markup: buildCostKeyboard(created.token) });
       return;
     }
     // Admin upload categorized: document-only path
@@ -837,6 +848,7 @@ async function onMessage(msg, env) {
       const manageKb = buildFileManageKeyboard(created.token, created, true);
       const caption = `✅ فایل ذخیره شد\nنام: ${created.name || created.type}\nتوکن: ${created.token}`;
       await tgApi('sendMessage', { chat_id: chatId, text: caption, reply_markup: manageKb });
+      await tgApi('sendMessage', { chat_id: chatId, text: '💰 هزینه فایل را انتخاب کنید (۱ تا ۱۰):', reply_markup: buildCostKeyboard(created.token) });
       return;
     }
     // Bulk upload: append tokens on each successful upload
