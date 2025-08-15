@@ -2582,10 +2582,35 @@ ${lines.join('\n')}
       text: statsText, 
       reply_markup: { inline_keyboard: [
         [{ text: '📊 جزئیات بیشتر', callback_data: 'ADMIN:STATS:DETAILS' }],
+        [{ text: '🏷 معرفین برتر', callback_data: 'ADMIN:STATS:TOPREF' }, { text: '💰 خریداران برتر', callback_data: 'ADMIN:STATS:TOPBUY' }],
         [{ text: '🔄 تازه‌سازی', callback_data: 'ADMIN:STATS' }],
         [{ text: '🏠 منو', callback_data: 'MENU' }]
       ] }
     });
+    return;
+  }
+  if (data === 'ADMIN:STATS:TOPREF' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const top = await computeTopReferrers(env, 10);
+    const text = top.length
+      ? '🏷 معرفین برتر (۱۰ نفر):\n' + top.map((u, i) => `${i+1}. ${u.id} ${u.username ? `(@${u.username})` : ''} — معرفی‌ها: ${u.referrals||0} | الماس: ${u.diamonds||0}`).join('\n')
+      : '— هیچ داده‌ای یافت نشد.';
+    const kb = { inline_keyboard: [
+      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:STATS' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
+    return;
+  }
+  if (data === 'ADMIN:STATS:TOPBUY' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const top = await computeTopPurchasers(env, 10);
+    const text = top.length
+      ? '💰 خریداران برتر (۱۰ نفر):\n' + top.map((u, i) => `${i+1}. ${u.user_id} ${u.username ? `(@${u.username})` : ''} — خرید: ${u.count||0} | الماس: ${u.diamonds||0} | مبلغ: ${(u.amount||0).toLocaleString('fa-IR')}ت`).join('\n')
+      : '— هیچ داده‌ای یافت نشد.';
+    const kb = { inline_keyboard: [
+      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:STATS' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
     return;
   }
   if (data === 'ADMIN:STATS:DETAILS' && isAdmin(uid)) {
