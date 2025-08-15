@@ -250,6 +250,9 @@ function formatFileSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// Small delay helper (used for /update UX)
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
 /* ==================== 5) Settings & Date helpers ==================== */
 let SETTINGS_MEMO = null;
 let SETTINGS_MEMO_AT = 0;
@@ -413,16 +416,14 @@ function buildAdminPanelKeyboard() {
     { text: '📆 ماموریت‌ها', callback_data: 'ADMIN:MISSIONS' }
   ]);
   rows.push([
-    { text: '🗄 تهیه پشتیبان', callback_data: 'ADMIN:BACKUP' }
+    { text: '🗄 تهیه پشتیبان', callback_data: 'ADMIN:BACKUP' },
+    { text: '🎟 قرعه‌کشی', callback_data: 'ADMIN:LOTTERY' }
   ]);
   rows.push([
     { text: '💳 مدیریت پرداخت‌ها', callback_data: 'ADMIN:PAYMENTS' }
   ]);
   rows.push([
     { text: '🚫 غیرفعال‌سازی دکمه‌ها', callback_data: 'ADMIN:DISABLE_BTNS' }
-  ]);
-  rows.push([
-    { text: '🎟 قرعه‌کشی', callback_data: 'ADMIN:LOTTERY' }
   ]);
   rows.push([
     { text: '🧾 مدیریت تیکت‌ها', callback_data: 'ADMIN:TICKETS' }
@@ -506,7 +507,7 @@ async function buildMyFilesKeyboard(env, uid, page = 0, pageSize = 5) {
   }
   const isUserAdmin = isAdmin(uid);
   const rows = files.flatMap(f => ([(
-    [{ text: `ℹ️ ${f.name || 'file'}`, callback_data: `DETAILS:${f.token}:${page}` }]
+    [{ text: `ℹ️ ${f.name || 'file'} — ⬇️ ${(f.downloads||0)}`, callback_data: `DETAILS:${f.token}:${page}` }]
   ), (
     [
       { text: `📥 دریافت`, callback_data: `SEND:${f.token}` },
@@ -526,11 +527,14 @@ async function buildMyFilesKeyboard(env, uid, page = 0, pageSize = 5) {
   return { text, reply_markup: { inline_keyboard: rows } };
 }
 async function sendMainMenu(env, chatId, uid) {
-  await tgApi('sendMessage', {
-    chat_id: chatId,
-    text: 'لطفا یک گزینه را انتخاب کنید:',
-    reply_markup: await buildDynamicMainMenu(env, uid)
-  });
+  try {
+    const requireJoin = await getRequiredChannels(env);
+    if (requireJoin.length && !isAdmin(uid)) {
+      const joined = await isUserJoinedAllRequiredChannels(env, uid);
+      if (!joined) { await presentJoinPrompt(env, chatId); return; }
+    }
+  } catch (_) {}
+  await tgApi('sendMessage', { chat_id: chatId, text: 'لطفا یک گزینه را انتخاب کنید:', reply_markup: await buildDynamicMainMenu(env, uid) });
 }
 
 /* ==================== 9) Telegram webhook handling ==================== */
@@ -555,6 +559,14 @@ async function onMessage(msg, env) {
   const chatId = msg.chat.id;
   const from = msg.from || {};
   const uid = from.id;
+
+  // Ignore non-private chats: the bot should not speak in groups; used only to check membership
+  try {
+    const chatType = msg.chat && msg.chat.type;
+    if (chatType && chatType !== 'private') {
+      return; // do nothing in groups/channels
+    }
+  } catch (_) {}
 
   // enforce block
   if (!isAdmin(uid)) {
@@ -588,6 +600,20 @@ async function onMessage(msg, env) {
   }
 
   const text = (msg.text || '').trim();
+  // /update: simulate updating flow then show menu
+  if (text === '/update') {
+    await tgApi('sendMessage', { chat_id: chatId, text: 'در حال بروزرسانی به آخرین نسخه…' });
+    await sleep(6500);
+    await tgApi('sendMessage', { chat_id: chatId, text: 'بروزرسانی انجام شد ✅' });
+    // Enforce join before showing menu
+    const requireJoin0 = await getRequiredChannels(env);
+    if (requireJoin0.length && !isAdmin(uid)) {
+      const joinedAll0 = await isUserJoinedAllRequiredChannels(env, uid);
+      if (!joinedAll0) { await presentJoinPrompt(env, chatId); return; }
+    }
+    await sendMainMenu(env, chatId, uid);
+    return;
+  }
 
   // session-driven flows
   const session = await getSession(env, uid);
@@ -776,6 +802,43 @@ async function onMessage(msg, env) {
       await tgApi('sendMessage', { chat_id: chatId, text: caption, reply_markup: manageKb });
       return;
     }
+    // Admin upload categorized: text only
+    if (session.awaiting === 'upload_wait_text' && text) {
+      if (!isAdmin(uid)) { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'فقط ادمین‌ها مجاز هستند.' }); return; }
+      const created = await handleAnyUpload({ text }, env, { ownerId: uid });
+      await setSession(env, uid, {});
+      if (!created) { await tgApi('sendMessage', { chat_id: chatId, text: 'ثبت متن ناموفق بود.' }); return; }
+      const manageKb = buildFileManageKeyboard(created.token, created, true);
+      await tgApi('sendMessage', { chat_id: chatId, text: `✅ متن ذخیره شد\nتوکن: ${created.token}`, reply_markup: manageKb });
+      return;
+    }
+    // Admin upload categorized: link
+    if (session.awaiting === 'upload_wait_link' && text) {
+      if (!isAdmin(uid)) { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'فقط ادمین‌ها مجاز هستند.' }); return; }
+      const link = String(text).trim();
+      const isValid = /^https?:\/\//i.test(link);
+      if (!isValid) { await tgApi('sendMessage', { chat_id: chatId, text: 'لینک نامعتبر است. باید با http یا https شروع شود.' }); return; }
+      // store as text-type with name 'لینک'
+      const created = await handleAnyUpload({ text: link }, env, { ownerId: uid });
+      if (created) { created.name = 'لینک'; await kvPutJson(env, `file:${created.token}`, created); }
+      await setSession(env, uid, {});
+      if (!created) { await tgApi('sendMessage', { chat_id: chatId, text: 'ثبت لینک ناموفق بود.' }); return; }
+      const manageKb = buildFileManageKeyboard(created.token, created, true);
+      await tgApi('sendMessage', { chat_id: chatId, text: `✅ لینک ذخیره شد\nتوکن: ${created.token}`, reply_markup: manageKb });
+      return;
+    }
+    // Admin upload categorized: document-only path
+    if (session.awaiting === 'upload_wait_file') {
+      if (!isAdmin(uid)) { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'فقط ادمین‌ها مجاز هستند.' }); return; }
+      if (!msg.document) { await tgApi('sendMessage', { chat_id: chatId, text: 'لطفاً فایل (document) ارسال کنید.' }); return; }
+      const created = await handleAnyUpload(msg, env, { ownerId: uid });
+      await setSession(env, uid, {});
+      if (!created) { await tgApi('sendMessage', { chat_id: chatId, text: 'آپلود ناموفق بود.' }); return; }
+      const manageKb = buildFileManageKeyboard(created.token, created, true);
+      const caption = `✅ فایل ذخیره شد\nنام: ${created.name || created.type}\nتوکن: ${created.token}`;
+      await tgApi('sendMessage', { chat_id: chatId, text: caption, reply_markup: manageKb });
+      return;
+    }
     // Bulk upload: append tokens on each successful upload
     if (session.awaiting === 'bulk_upload') {
       if (!isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: 'فقط ادمین‌ها.' }); return; }
@@ -891,7 +954,7 @@ async function onMessage(msg, env) {
       await tgApi('sendMessage', { chat_id: chatId, text: 'در حال ارسال پیام به همه کاربران...' });
       const res = await broadcast(env, text);
       await setSession(env, uid, {});
-      await tgApi('sendMessage', { chat_id: chatId, text: `ارسال شد ✅\nموفق: ${res.successful}\nناموفق: ${res.failed}` });
+      await tgApi('sendMessage', { chat_id: chatId, text: `پیام به همه کاربران ارسال شد و فرآیند به پایان رسید ✅\nموفق: ${res.successful}\nناموفق: ${res.failed}` });
       return;
     }
     if (session.awaiting === 'join_add' && isAdmin(uid) && text) {
@@ -914,24 +977,7 @@ async function onMessage(msg, env) {
       await tgApi('sendMessage', { chat_id: chatId, text: `ادمین ${id} اضافه شد.` });
       return;
     }
-    if (session.awaiting.startsWith('setcost:') && text) {
-      const token = session.awaiting.split(':')[1];
-      if (!isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: 'فقط ادمین مجاز است.' }); await setSession(env, uid, {}); return; }
-      const pts = parseInt(text, 10);
-      if (Number.isFinite(pts) && pts >= 0) {
-        const file = await kvGetJson(env, `file:${token}`);
-        if (file) {
-          file.cost_points = pts; await kvPutJson(env, `file:${token}`, file);
-    await tgApi('sendMessage', { chat_id: chatId, text: `هزینه فایل روی ${pts} الماس تنظیم شد.` });
-          await setSession(env, uid, {});
-          const { text: mfText, reply_markup } = await buildMyFilesKeyboard(env, uid, 0);
-          await tgApi('sendMessage', { chat_id: chatId, text: mfText, reply_markup });
-          return;
-        }
-      }
-      await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار نامعتبر است. یک عدد غیرمنفی ارسال کنید.' });
-      return;
-    }
+    
     if (session.awaiting === 'get_by_token' && text) {
       const token = text.trim();
       await setSession(env, uid, {});
@@ -1344,15 +1390,13 @@ async function onMessage(msg, env) {
       : (updateMode && !isAdmin(uid)
         ? '🔧 ربات در حال بروزرسانی است. لطفاً دقایقی دیگر مجدداً تلاش کنید.'
         : `سلام ${from.first_name||''}! 🤖\nاز منو گزینه مورد نظر را انتخاب کنید.`);
-    // send welcome immediately, then enforce join if needed
-    await tgApi('sendMessage', { chat_id: chatId, text: welcomeText, reply_markup: await buildDynamicMainMenu(env, uid) });
+    // Enforce join BEFORE showing menu
     const requireJoin2 = await getRequiredChannels(env);
     if (requireJoin2.length && !isAdmin(uid)) {
       const joinedAll2 = await isUserJoinedAllRequiredChannels(env, uid);
-      if (!joinedAll2) {
-        await presentJoinPrompt(env, chatId);
-      }
+      if (!joinedAll2) { await presentJoinPrompt(env, chatId); return; }
     }
+    await tgApi('sendMessage', { chat_id: chatId, text: welcomeText, reply_markup: await buildDynamicMainMenu(env, uid) });
     return;
   }
 
@@ -1486,12 +1530,26 @@ async function onMessage(msg, env) {
   }
 
   // fallback -> show menu
+  // Enforce join before showing menu universally
+  const requireJoinF = await getRequiredChannels(env);
+  if (requireJoinF.length && !isAdmin(uid)) {
+    const joinedAllF = await isUserJoinedAllRequiredChannels(env, uid);
+    if (!joinedAllF) { await presentJoinPrompt(env, chatId); return; }
+  }
   await sendMainMenu(env, chatId, uid);
 }
 
 async function onCallback(cb, env) {
   const data = cb.data; const chatId = cb.message.chat.id; const from = cb.from;
   const uid = from.id;
+  // Ignore callbacks in non-private chats
+  try {
+    const chatType = cb.message && cb.message.chat && cb.message.chat.type;
+    if (chatType && chatType !== 'private') {
+      await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+      return;
+    }
+  } catch (_) {}
   // Ack immediately to stop Telegram UI spinner
   try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); } catch (_) {}
   // enforce block also for callbacks
@@ -1506,6 +1564,12 @@ async function onCallback(cb, env) {
     } catch (_) {}
   }
   if (data === 'MENU') {
+    // Enforce join before showing menu
+    const requireJoin = await getRequiredChannels(env);
+    if (requireJoin.length && !isAdmin(uid)) {
+      const joined = await isUserJoinedAllRequiredChannels(env, uid);
+      if (!joined) { await presentJoinPrompt(env, chatId); return; }
+    }
     await tgApi('sendMessage', { chat_id: chatId, text: 'منوی اصلی:', reply_markup: await buildDynamicMainMenu(env, uid) });
     return;
   }
@@ -1697,9 +1761,33 @@ ${lines.join('\n')}
     return;
   }
   if (data === 'ADMIN:UPLOAD' && isAdmin(uid)) {
-    await setSession(env, uid, { awaiting: 'upload_wait' });
+    // Show categorized upload options
+    await setSession(env, uid, {});
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    await tgApi('sendMessage', { chat_id: chatId, text: 'لطفاً متن یا یکی از انواع رسانه (document/photo/video/audio/voice) را ارسال کنید.' });
+    const kb = { inline_keyboard: [
+      [{ text: '📝 متن', callback_data: 'UPLOAD_CAT:TEXT' }, { text: '🔗 لینک', callback_data: 'UPLOAD_CAT:LINK' }],
+      [{ text: '📄 فایل', callback_data: 'UPLOAD_CAT:FILE' }, { text: '🖼 سایر رسانه', callback_data: 'UPLOAD_CAT:OTHER' }],
+      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text: 'یک دسته آپلود را انتخاب کنید:', reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('UPLOAD_CAT:') && isAdmin(uid)) {
+    const cat = data.split(':')[1];
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    if (cat === 'TEXT') {
+      await setSession(env, uid, { awaiting: 'upload_wait_text' });
+      await tgApi('sendMessage', { chat_id: chatId, text: 'متن خود را ارسال کنید:' });
+    } else if (cat === 'LINK') {
+      await setSession(env, uid, { awaiting: 'upload_wait_link' });
+      await tgApi('sendMessage', { chat_id: chatId, text: 'لینک خود را ارسال کنید (http/https):' });
+    } else if (cat === 'FILE') {
+      await setSession(env, uid, { awaiting: 'upload_wait_file' });
+      await tgApi('sendMessage', { chat_id: chatId, text: 'فایل (document) خود را ارسال کنید.' });
+    } else {
+      await setSession(env, uid, { awaiting: 'upload_wait' });
+      await tgApi('sendMessage', { chat_id: chatId, text: 'یکی از انواع رسانه (photo/video/audio/voice) را ارسال کنید.' });
+    }
     return;
   }
   if (data === 'CHECK_JOIN') {
