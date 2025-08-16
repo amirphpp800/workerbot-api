@@ -1798,7 +1798,7 @@ ${lines.join('\n')}
   if (data === 'PRIVATE_SERVER') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
-      [{ text: '🧩 سرور', callback_data: 'PS:DNS' }],
+      [{ text: '🧩 دی ان اس اختصاصی', callback_data: 'PS:DNS' }],
       [{ text: '🛰 وایرگارد اختصاصی', callback_data: 'PS:WG' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
@@ -1821,7 +1821,7 @@ ${lines.join('\n')}
     // ask to confirm payment of 1 diamond
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    const text = `خدمت سرور اختصاصی (${dnsCountryLabel(code)})\nاین خدمت 1 الماس هزینه دارد. پرداخت انجام شود؟\n\nموجودی شما: ${user.diamonds || 0}`;
+    const text = `سرور اختصاصی (${dnsCountryLabel(code)})\nاین سرویس 1 الماس هزینه دارد. پرداخت انجام شود؟\n\nموجودی شما: ${user.diamonds || 0}`;
     const kb = { inline_keyboard: [
       [{ text: '✅ پرداخت و دریافت', callback_data: `PS:DNSCONF:${code}` }],
       [{ text: '❌ انصراف', callback_data: 'PS:DNS' }]
