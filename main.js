@@ -348,11 +348,13 @@ async function generateDnsAddresses(env, countryCode) {
 function dnsCountryLabel(code) {
   if (code === 'ES') return 'اسپانیا';
   if (code === 'DE') return 'آلمان';
+  if (code === 'JP') return 'ژاپن';
   return code;
 }
 function countryFlag(code) {
   if (code === 'ES') return '🇪🇸';
   if (code === 'DE') return '🇩🇪';
+  if (code === 'JP') return '🇯🇵';
   return '';
 }
 function base64UrlToBase64(u) {
@@ -1826,6 +1828,7 @@ ${lines.join('\n')}
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
       [{ text: '🇪🇸 اسپانیا', callback_data: 'PS:DNS:ES' }, { text: '🇩🇪 آلمان', callback_data: 'PS:DNS:DE' }],
+      [{ text: '🇯🇵 ژاپن', callback_data: 'PS:DNS:JP' }],
       [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
@@ -1934,6 +1937,7 @@ ${lines.join('\n')}
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
       [{ text: '🇪🇸 اسپانیا', callback_data: 'PS:WG:ES' }, { text: '🇩🇪 آلمان', callback_data: 'PS:WG:DE' }],
+      [{ text: '🇯🇵 ژاپن', callback_data: 'PS:WG:JP' }],
       [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
