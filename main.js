@@ -258,6 +258,99 @@ function formatFileSize(bytes) {
 // Small delay helper (used for /update UX)
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
+// ===== Private Server / DNS helpers =====
+// Default ranges moved to external file `dns_ranges.json` for easier maintenance
+import dnsRanges from './dns_ranges.json' assert { type: 'json' };
+async function getDnsCidrConfig(env) {
+  return (await kvGetJson(env, 'ps:dns:cidr')) || dnsRanges;
+}
+function randomIntInclusive(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+// IPv4 helpers
+function ip4ToInt(ip) {
+  const parts = ip.split('.').map(n => Number(n));
+  return ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+}
+function intToIp4(num) {
+  const p1 = (num >>> 24) & 255;
+  const p2 = (num >>> 16) & 255;
+  const p3 = (num >>> 8) & 255;
+  const p4 = num & 255;
+  return `${p1}.${p2}.${p3}.${p4}`;
+}
+function randomIp4FromCidr(cidr) {
+  const [ip, prefixStr] = cidr.split('/');
+  const prefix = Number(prefixStr);
+  const base = ip4ToInt(ip);
+  const hostBits = 32 - prefix;
+  const size = 2 ** hostBits;
+  if (size <= 2) return intToIp4(base);
+  const start = (base >>> hostBits) << hostBits; // network
+  const rnd = randomIntInclusive(1, size - 2); // avoid network and broadcast
+  return intToIp4((start + rnd) >>> 0);
+}
+// IPv6 helpers
+function ipv6ToBigInt(ipv6) {
+  let [head, tail] = ipv6.split('::');
+  let headParts = head ? head.split(':') : [];
+  let tailParts = tail ? tail.split(':') : [];
+  if (tail === undefined) { headParts = ipv6.split(':'); tailParts = []; }
+  const totalParts = headParts.length + tailParts.length;
+  const missing = 8 - totalParts;
+  const hextets = [ ...headParts, ...Array(Math.max(0, missing)).fill('0'), ...tailParts ].map(h => h === '' ? '0' : h);
+  let value = 0n;
+  for (const h of hextets) { value = (value << 16n) + BigInt(parseInt(h, 16) || 0); }
+  return value;
+}
+function bigIntToIpv6(value) {
+  const parts = [];
+  for (let i = 0; i < 8; i++) {
+    const shift = BigInt(112 - i * 16);
+    const part = (value >> shift) & 0xffffn;
+    parts.push(part.toString(16));
+  }
+  return parts.join(':');
+}
+function randomBigInt(maxExclusive) {
+  const a = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
+  const b = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
+  const rnd = (a << 53n) ^ b;
+  return rnd % maxExclusive;
+}
+function randomIpv6FromCidr(cidr) {
+  const [ip, prefixStr] = cidr.split('/');
+  const prefix = Number(prefixStr);
+  const base = ipv6ToBigInt(ip);
+  const hostBits = 128 - prefix;
+  if (hostBits <= 0) return bigIntToIpv6(base);
+  const max = 1n << BigInt(hostBits);
+  let offset = randomBigInt(max);
+  if (max > 2n) { if (offset === 0n) offset = 1n; }
+  const mask = ((1n << BigInt(prefix)) - 1n) << BigInt(hostBits);
+  const network = base & mask;
+  return bigIntToIpv6(network + offset);
+}
+async function generateDnsAddresses(env, countryCode) {
+  const cfg = await getDnsCidrConfig(env);
+  const c = cfg[countryCode];
+  if (!c) throw new Error('country_not_supported');
+  const pick = (arr) => arr[randomIntInclusive(0, arr.length - 1)];
+  const v4cidr = pick(c.v4);
+  const v6cidrA = pick(c.v6);
+  const v6cidrB = pick(c.v6);
+  const ip4 = randomIp4FromCidr(v4cidr);
+  const ip6a = randomIpv6FromCidr(v6cidrA);
+  let ip6b = randomIpv6FromCidr(v6cidrB);
+  if (ip6b === ip6a) ip6b = randomIpv6FromCidr(v6cidrB);
+  return { ip4, ip6a, ip6b };
+}
+function dnsCountryLabel(code) {
+  if (code === 'ES') return 'اسپانیا';
+  if (code === 'DE') return 'آلمان';
+  return code;
+}
+
 /* ==================== 5) Settings & Date helpers ==================== */
 let SETTINGS_MEMO = null;
 let SETTINGS_MEMO_AT = 0;
@@ -1715,10 +1808,41 @@ ${lines.join('\n')}
   if (data === 'PS:DNS') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
+      [{ text: '🇪🇸 اسپانیا', callback_data: 'PS:DNS:ES' }, { text: '🇩🇪 آلمان', callback_data: 'PS:DNS:DE' }],
       [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش در حال توسعه است', reply_markup: kb });
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای DNS اختصاصی را انتخاب کنید:', reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('PS:DNS:')) {
+    const code = data.split(':')[2];
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    // charge 1 diamond
+    const userKey = `user:${uid}`;
+    const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
+    if ((user.diamonds || 0) < 1) {
+      await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این خدمت 1 الماس هزینه دارد.' });
+      return;
+    }
+    user.diamonds = (user.diamonds || 0) - 1;
+    await kvPutJson(env, userKey, user);
+    // generate addresses
+    let addrs;
+    try {
+      addrs = await generateDnsAddresses(env, code);
+    } catch (_) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'کشور انتخاب‌شده پشتیبانی نمی‌شود.' });
+      return;
+    }
+    const caption = `🔧 DNS اختصاصی (${dnsCountryLabel(code)})\n\n` +
+      `IPv4:\n\`${addrs.ip4}\`\n\n` +
+      `IPv6-1:\n\`${addrs.ip6a}\`\n\n` +
+      `IPv6-2:\n\`${addrs.ip6b}\``;
+    await tgApi('sendMessage', { chat_id: chatId, text: caption, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+      [{ text: '⬅️ بازگشت', callback_data: 'PS:DNS' }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] } });
     return;
   }
   if (data === 'PS:WG') {
