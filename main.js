@@ -1847,6 +1847,14 @@ ${lines.join('\n')}
       await tgApi('sendMessage', { chat_id: chatId, text: 'کشور انتخاب‌شده پشتیبانی نمی‌شود.' });
       return;
     }
+    // save server entry for user
+    try {
+      const listKey = `user:${uid}:servers`;
+      const list = (await kvGetJson(env, listKey)) || [];
+      list.unshift({ id: `${now()}`, type: 'dns', country: code, v4: addrs.ip4, v6: [addrs.ip6a, addrs.ip6b], created_at: now() });
+      if (list.length > 200) list.length = 200;
+      await kvPutJson(env, listKey, list);
+    } catch (_) {}
     const caption = `🔧 سرور اختصاصی (${dnsCountryLabel(code)})\n\n` +
       `ℹ️ دی‌ان‌اس اول (تانل) را از این پست بردارید:\nhttps://t.me/NoiDUsers/117\n\n` +
       `IPv4:\n\`${addrs.ip4}\`\n\n` +
@@ -1856,6 +1864,35 @@ ${lines.join('\n')}
       [{ text: '⬅️ بازگشت', callback_data: 'PS:DNS' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] } });
+    return;
+  }
+  if (data === 'MY_SERVERS') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const listKey = `user:${uid}:servers`;
+    const list = (await kvGetJson(env, listKey)) || [];
+    if (!list.length) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'هنوز سروری ندارید.' });
+      return;
+    }
+    // group by country and type
+    const groups = {};
+    for (const s of list) {
+      const key = `${s.country||'UNK'}:${(s.type||'dns').toUpperCase()}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(s);
+    }
+    const sections = Object.entries(groups).map(([k, arr]) => {
+      const [code, typ] = k.split(':');
+      const header = `— ${dnsCountryLabel(code)} | ${typ} —`;
+      const lines = arr.slice(0, 5).map(it => {
+        const v6a = (it.v6 && it.v6[0]) ? it.v6[0] : '-';
+        const v6b = (it.v6 && it.v6[1]) ? it.v6[1] : '-';
+        return `IPv4: \`${it.v4}\`\nIPv6-1: \`${v6a}\`\nIPv6-2: \`${v6b}\``;
+      });
+      return `${header}\n${lines.join('\n\n')}`;
+    });
+    const text = `🧩 سرورهای من\n\n${sections.join('\n\n')}`;
+    await tgApi('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] } });
     return;
   }
   if (data === 'PS:WG') {
@@ -2084,7 +2121,10 @@ ${lines.join('\n')}
         { text: '🧾 ثبت تیکت جدید', callback_data: 'TICKET:NEW' },
         { text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }
       ],
-      [{ text: '💸 انتقال موجودی', callback_data: 'BAL:START' }],
+      [
+        { text: '🧩 سرورهای من', callback_data: 'MY_SERVERS' },
+        { text: '💸 انتقال موجودی', callback_data: 'BAL:START' }
+      ],
       [
         { text: '🏠 منو', callback_data: 'MENU' },
         { text: '🆘 پشتیبانی', callback_data: 'SUPPORT' }
