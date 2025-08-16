@@ -350,6 +350,11 @@ function dnsCountryLabel(code) {
   if (code === 'DE') return 'آلمان';
   return code;
 }
+function countryFlag(code) {
+  if (code === 'ES') return '🇪🇸';
+  if (code === 'DE') return '🇩🇪';
+  return '';
+}
 
 /* ==================== 5) Settings & Date helpers ==================== */
 let SETTINGS_MEMO = null;
@@ -1874,25 +1879,43 @@ ${lines.join('\n')}
       await tgApi('sendMessage', { chat_id: chatId, text: 'هنوز سروری ندارید.' });
       return;
     }
-    // group by country and type
+    // group by country and type, show as inline buttons per country
     const groups = {};
     for (const s of list) {
       const key = `${s.country||'UNK'}:${(s.type||'dns').toUpperCase()}`;
       if (!groups[key]) groups[key] = [];
       groups[key].push(s);
     }
-    const sections = Object.entries(groups).map(([k, arr]) => {
+    const rows = [];
+    for (const [k, arr] of Object.entries(groups)) {
       const [code, typ] = k.split(':');
-      const header = `— ${dnsCountryLabel(code)} | ${typ} —`;
-      const lines = arr.slice(0, 5).map(it => {
-        const v6a = (it.v6 && it.v6[0]) ? it.v6[0] : '-';
-        const v6b = (it.v6 && it.v6[1]) ? it.v6[1] : '-';
-        return `IPv4: \`${it.v4}\`\nIPv6-1: \`${v6a}\`\nIPv6-2: \`${v6b}\``;
-      });
-      return `${header}\n${lines.join('\n\n')}`;
-    });
-    const text = `🧩 سرورهای من\n\n${sections.join('\n\n')}`;
-    await tgApi('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+      const label = `${countryFlag(code)} ${dnsCountryLabel(code)} — ${typ}`.trim();
+      rows.push([{ text: label, callback_data: `MY_SERVERS_VIEW:${code}:${typ}` }]);
+    }
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: '🧩 سرورهای من — روی کشور کلیک کنید:', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data.startsWith('MY_SERVERS_VIEW:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const [, code, typ] = data.split(':');
+    const listKey = `user:${uid}:servers`;
+    const list = (await kvGetJson(env, listKey)) || [];
+    const filtered = list.filter(s => (s.country||'') === code && ((s.type||'dns').toUpperCase() === typ));
+    if (!filtered.length) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'موردی یافت نشد.' });
+      return;
+    }
+    const lines = filtered.slice(0, 10).map((it, idx) => {
+      const v6a = (it.v6 && it.v6[0]) ? it.v6[0] : '-';
+      const v6b = (it.v6 && it.v6[1]) ? it.v6[1] : '-';
+      return `#${idx+1}\nIPv4: \`${it.v4}\`\nIPv6-1: \`${v6a}\`\nIPv6-2: \`${v6b}\``;
+    }).join('\n\n');
+    const text = `${countryFlag(code)} ${dnsCountryLabel(code)} — ${typ}\n\n${lines}`;
+    await tgApi('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+      [{ text: '⬅️ بازگشت', callback_data: 'MY_SERVERS' }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] } });
     return;
   }
   if (data === 'PS:WG') {
