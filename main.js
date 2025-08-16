@@ -1838,7 +1838,7 @@ ${lines.join('\n')}
     // ask to confirm payment of 1 diamond
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    const text = `سرور اختصاصی (${dnsCountryLabel(code)})\nاین سرویس 1 الماس هزینه دارد. پرداخت انجام شود؟\n\nموجودی شما: ${user.diamonds || 0}`;
+    const text = `🧩 دی ان اس اختصاصی (${dnsCountryLabel(code)})\n\n💎 هزینه: 2 الماس\n💳 آیا پرداخت انجام شود؟\n\n👤 موجودی شما: ${user.diamonds || 0}`;
     const kb = { inline_keyboard: [
       [{ text: '✅ پرداخت و دریافت', callback_data: `PS:DNSCONF:${code}` }],
       [{ text: '❌ انصراف', callback_data: 'PS:DNS' }]
@@ -1851,11 +1851,11 @@ ${lines.join('\n')}
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    if ((user.diamonds || 0) < 1) {
-      await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این خدمت 1 الماس هزینه دارد.' });
+    if ((user.diamonds || 0) < 2) {
+      await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این سرویس 2 الماس هزینه دارد.' });
       return;
     }
-    user.diamonds = (user.diamonds || 0) - 1;
+    user.diamonds = (user.diamonds || 0) - 2;
     await kvPutJson(env, userKey, user);
     let addrs;
     try {
@@ -1946,7 +1946,7 @@ ${lines.join('\n')}
     // confirm 1-diamond charge
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    const text = `وایرگارد اختصاصی (${dnsCountryLabel(code)})\nاین سرویس 1 الماس هزینه دارد. پرداخت انجام شود؟\n\nموجودی شما: ${user.diamonds || 0}`;
+    const text = `🛰️ وایرگارد اختصاصی (${dnsCountryLabel(code)})\n\n💎 هزینه: 2 الماس\n💳 آیا پرداخت انجام شود؟\n\n👤 موجودی شما: ${user.diamonds || 0}`;
     const kb = { inline_keyboard: [
       [{ text: '✅ پرداخت و دریافت', callback_data: `PS:WGCONF:${code}` }],
       [{ text: '❌ انصراف', callback_data: 'PS:WG' }]
@@ -1959,8 +1959,8 @@ ${lines.join('\n')}
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    if ((user.diamonds || 0) < 1) { await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این سرویس 1 الماس هزینه دارد.' }); return; }
-    user.diamonds = (user.diamonds || 0) - 1; await kvPutJson(env, userKey, user);
+    if ((user.diamonds || 0) < 2) { await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این سرویس 2 الماس هزینه دارد.' }); return; }
+    user.diamonds = (user.diamonds || 0) - 2; await kvPutJson(env, userKey, user);
     // generate keys
     const kp = await generateWgKeypairBase64();
     // DNS: one from country ranges + fixed 10.202.10.10 + one IPv6
