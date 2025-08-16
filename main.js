@@ -367,9 +367,9 @@ async function buildDynamicMainMenu(env, uid) {
     { text: labelFor(settings.button_labels, 'gift', '🎁 کد هدیه'), callback_data: 'REDEEM_GIFT' },
     { text: labelFor(settings.button_labels, 'get_by_token', '🔑 دریافت با توکن'), callback_data: 'GET_BY_TOKEN' }
   ]);
-  // Add Support under Gift/Token row
+  // Replace Support row with Private Server in main menu
   rows.push([
-    { text: '🆘 پشتیبانی', callback_data: 'SUPPORT' }
+    { text: '🛡️ سرور اختصاصی', callback_data: 'PRIVATE_SERVER' }
   ]);
 
   // Row 3: (Support removed per request)
@@ -380,10 +380,7 @@ async function buildDynamicMainMenu(env, uid) {
     { text: labelFor(settings.button_labels, 'missions', '📆 مأموریت‌ها'), callback_data: 'MISSIONS' }
   ]);
 
-  // Row: Private Server (under development)
-  rows.push([
-    { text: 'سرور اختصاصی', callback_data: 'PRIVATE_SERVER' }
-  ]);
+  // (Private Server row already added above as replacement for Support)
 
   // Row 5: Buy Diamonds (single)
   rows.push([{ text: labelFor(settings.button_labels, 'buy_points', '💳 خرید الماس'), callback_data: 'BUY_DIAMONDS' }]);
@@ -1695,15 +1692,8 @@ ${lines.join('\n')}
   }
   if (data === 'SUPPORT') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    // Show structured support options instead of free-form prompt
-    const kb = { inline_keyboard: [
-      [{ text: '🧾 ثبت تیکت جدید', callback_data: 'TICKET:NEW' }],
-      [{ text: '✉️ ارسال پیام به پشتیبانی', callback_data: 'SUPPORT:MSG' }],
-      [{ text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }],
-      [{ text: '🏠 منو', callback_data: 'MENU' }]
-    ] };
-    await setSession(env, uid, {});
-    await tgApi('sendMessage', { chat_id: chatId, text: '🆘 پشتیبانی — لطفاً یکی از گزینه‌ها را انتخاب کنید:', reply_markup: kb });
+    // Redirect to account submenu support area
+    await tgApi('sendMessage', { chat_id: chatId, text: 'برای دسترسی به پشتیبانی به بخش «حساب کاربری» بروید.', reply_markup: { inline_keyboard: [[{ text: '👤 حساب کاربری', callback_data: 'SUB:ACCOUNT' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
     return;
   }
   if (data === 'SUPPORT:MSG') {
@@ -1714,7 +1704,30 @@ ${lines.join('\n')}
   }
   if (data === 'PRIVATE_SERVER') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش در حال توسعه است', reply_markup: { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+    const kb = { inline_keyboard: [
+      [{ text: '🧩 دی ان اس اختصاصی', callback_data: 'PS:DNS' }],
+      [{ text: '🛰 وایرگارد اختصاصی', callback_data: 'PS:WG' }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text: '🛡️ سرور اختصاصی — یک گزینه را انتخاب کنید:', reply_markup: kb });
+    return;
+  }
+  if (data === 'PS:DNS') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const kb = { inline_keyboard: [
+      [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش در حال توسعه است', reply_markup: kb });
+    return;
+  }
+  if (data === 'PS:WG') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const kb = { inline_keyboard: [
+      [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش در حال توسعه است', reply_markup: kb });
     return;
   }
   if (data.startsWith('SUPREPLY:') && isAdmin(uid)) {
