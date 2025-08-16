@@ -1798,7 +1798,7 @@ ${lines.join('\n')}
   if (data === 'PRIVATE_SERVER') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
-      [{ text: '🧩 دی ان اس اختصاصی', callback_data: 'PS:DNS' }],
+      [{ text: '🧩 سرور', callback_data: 'PS:DNS' }],
       [{ text: '🛰 وایرگارد اختصاصی', callback_data: 'PS:WG' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
@@ -1812,7 +1812,7 @@ ${lines.join('\n')}
       [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای DNS اختصاصی را انتخاب کنید:', reply_markup: kb });
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای سرور اختصاصی را انتخاب کنید:', reply_markup: kb });
     return;
   }
   if (data.startsWith('PS:DNS:')) {
@@ -1821,7 +1821,7 @@ ${lines.join('\n')}
     // ask to confirm payment of 1 diamond
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    const text = `خدمت DNS اختصاصی (${dnsCountryLabel(code)})\nاین خدمت 1 الماس هزینه دارد. پرداخت انجام شود؟\n\nموجودی شما: ${user.diamonds || 0}`;
+    const text = `خدمت سرور اختصاصی (${dnsCountryLabel(code)})\nاین خدمت 1 الماس هزینه دارد. پرداخت انجام شود؟\n\nموجودی شما: ${user.diamonds || 0}`;
     const kb = { inline_keyboard: [
       [{ text: '✅ پرداخت و دریافت', callback_data: `PS:DNSCONF:${code}` }],
       [{ text: '❌ انصراف', callback_data: 'PS:DNS' }]
@@ -1847,7 +1847,7 @@ ${lines.join('\n')}
       await tgApi('sendMessage', { chat_id: chatId, text: 'کشور انتخاب‌شده پشتیبانی نمی‌شود.' });
       return;
     }
-    const caption = `🔧 DNS اختصاصی (${dnsCountryLabel(code)})\n\n` +
+    const caption = `🔧 سرور اختصاصی (${dnsCountryLabel(code)})\n\n` +
       `ℹ️ دی‌ان‌اس اول (تانل) را از این پست بردارید:\nhttps://t.me/NoiDUsers/117\n\n` +
       `IPv4:\n\`${addrs.ip4}\`\n\n` +
       `IPv6-1:\n\`${addrs.ip6a}\`\n\n` +
