@@ -382,7 +382,7 @@ async function buildDynamicMainMenu(env, uid) {
 
   // Row: Private Server (under development)
   rows.push([
-    { text: 'Private Server', callback_data: 'PRIVATE_SERVER' }
+    { text: 'سرور اختصاصی', callback_data: 'PRIVATE_SERVER' }
   ]);
 
   // Row 5: Buy Diamonds (single)
@@ -1714,7 +1714,7 @@ ${lines.join('\n')}
   }
   if (data === 'PRIVATE_SERVER') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    await tgApi('sendMessage', { chat_id: chatId, text: 'This section is under development.', reply_markup: { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش در حال توسعه است', reply_markup: { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] } });
     return;
   }
   if (data.startsWith('SUPREPLY:') && isAdmin(uid)) {
