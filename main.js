@@ -1818,7 +1818,20 @@ ${lines.join('\n')}
   if (data.startsWith('PS:DNS:')) {
     const code = data.split(':')[2];
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    // charge 1 diamond
+    // ask to confirm payment of 1 diamond
+    const userKey = `user:${uid}`;
+    const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
+    const text = `خدمت DNS اختصاصی (${dnsCountryLabel(code)})\nاین خدمت 1 الماس هزینه دارد. پرداخت انجام شود؟\n\nموجودی شما: ${user.diamonds || 0}`;
+    const kb = { inline_keyboard: [
+      [{ text: '✅ پرداخت و دریافت', callback_data: `PS:DNSCONF:${code}` }],
+      [{ text: '❌ انصراف', callback_data: 'PS:DNS' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('PS:DNSCONF:')) {
+    const code = data.split(':')[2];
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
     if ((user.diamonds || 0) < 1) {
@@ -1827,7 +1840,6 @@ ${lines.join('\n')}
     }
     user.diamonds = (user.diamonds || 0) - 1;
     await kvPutJson(env, userKey, user);
-    // generate addresses
     let addrs;
     try {
       addrs = await generateDnsAddresses(env, code);
@@ -1836,6 +1848,7 @@ ${lines.join('\n')}
       return;
     }
     const caption = `🔧 DNS اختصاصی (${dnsCountryLabel(code)})\n\n` +
+      `ℹ️ دی‌ان‌اس اول (تانل) را از این پست بردارید:\nhttps://t.me/NoiDUsers/117\n\n` +
       `IPv4:\n\`${addrs.ip4}\`\n\n` +
       `IPv6-1:\n\`${addrs.ip6a}\`\n\n` +
       `IPv6-2:\n\`${addrs.ip6b}\``;
@@ -2072,8 +2085,10 @@ ${lines.join('\n')}
         { text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }
       ],
       [{ text: '💸 انتقال موجودی', callback_data: 'BAL:START' }],
-      [{ text: '🆘 پشتیبانی', callback_data: 'SUPPORT' }],
-      [{ text: '🏠 منو', callback_data: 'MENU' }]
+      [
+        { text: '🏠 منو', callback_data: 'MENU' },
+        { text: '🆘 پشتیبانی', callback_data: 'SUPPORT' }
+      ]
     ] };
     await tgApi('sendMessage', { chat_id: chatId, text, reply_markup });
     return;
