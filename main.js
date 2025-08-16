@@ -380,6 +380,11 @@ async function buildDynamicMainMenu(env, uid) {
     { text: labelFor(settings.button_labels, 'missions', '📆 مأموریت‌ها'), callback_data: 'MISSIONS' }
   ]);
 
+  // Row: Private Server (under development)
+  rows.push([
+    { text: 'Private Server', callback_data: 'PRIVATE_SERVER' }
+  ]);
+
   // Row 5: Buy Diamonds (single)
   rows.push([{ text: labelFor(settings.button_labels, 'buy_points', '💳 خرید الماس'), callback_data: 'BUY_DIAMONDS' }]);
 
@@ -1705,6 +1710,11 @@ ${lines.join('\n')}
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await setSession(env, uid, { awaiting: 'support_wait' });
     await tgApi('sendMessage', { chat_id: chatId, text: 'پیام خود را برای پشتیبانی ارسال کنید. می‌توانید متن، عکس یا فایل ارسال کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  if (data === 'PRIVATE_SERVER') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'This section is under development.', reply_markup: { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] } });
     return;
   }
   if (data.startsWith('SUPREPLY:') && isAdmin(uid)) {
@@ -4917,4 +4927,3 @@ async function ensureWebhookForRequest(env, req) {
 // Removed module-level network call to comply with Worker cold-start best practices
 
 /* End of enhanced worker */
-
