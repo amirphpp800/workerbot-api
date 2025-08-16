@@ -355,6 +355,18 @@ function countryFlag(code) {
   if (code === 'DE') return '🇩🇪';
   return '';
 }
+function base64UrlToBase64(u) {
+  const s = u.replace(/-/g, '+').replace(/_/g, '/');
+  return s + '='.repeat((4 - (s.length % 4)) % 4);
+}
+async function generateWgKeypairBase64() {
+  const kp = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
+  const jwkPriv = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  const jwkPub = await crypto.subtle.exportKey('jwk', kp.publicKey);
+  const privB64 = base64UrlToBase64(jwkPriv.d || '');
+  const pubB64 = base64UrlToBase64(jwkPub.x || '');
+  return { privateKey: privB64, publicKey: pubB64 };
+}
 
 /* ==================== 5) Settings & Date helpers ==================== */
 let SETTINGS_MEMO = null;
@@ -1921,10 +1933,80 @@ ${lines.join('\n')}
   if (data === 'PS:WG') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
+      [{ text: '🇪🇸 اسپانیا', callback_data: 'PS:WG:ES' }, { text: '🇩🇪 آلمان', callback_data: 'PS:WG:DE' }],
       [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش در حال توسعه است', reply_markup: kb });
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای وایرگارد اختصاصی را انتخاب کنید:', reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('PS:WG:')) {
+    const code = data.split(':')[2];
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    // confirm 1-diamond charge
+    const userKey = `user:${uid}`;
+    const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
+    const text = `وایرگارد اختصاصی (${dnsCountryLabel(code)})\nاین سرویس 1 الماس هزینه دارد. پرداخت انجام شود؟\n\nموجودی شما: ${user.diamonds || 0}`;
+    const kb = { inline_keyboard: [
+      [{ text: '✅ پرداخت و دریافت', callback_data: `PS:WGCONF:${code}` }],
+      [{ text: '❌ انصراف', callback_data: 'PS:WG' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('PS:WGCONF:')) {
+    const code = data.split(':')[2];
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const userKey = `user:${uid}`;
+    const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
+    if ((user.diamonds || 0) < 1) { await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این سرویس 1 الماس هزینه دارد.' }); return; }
+    user.diamonds = (user.diamonds || 0) - 1; await kvPutJson(env, userKey, user);
+    // generate keys
+    const kp = await generateWgKeypairBase64();
+    // DNS: one from country ranges + fixed 10.202.10.10 + one IPv6
+    const cfg = await getDnsCidrConfig(env);
+    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const v4cidr = pick((cfg[code]||{}).v4 || []);
+    const v6cidr = pick((cfg[code]||{}).v6 || []);
+    const dnsV4 = v4cidr ? randomIp4FromCidr(v4cidr) : '1.1.1.1';
+    const dnsFixedV4 = '10.202.10.10';
+    const dnsV6 = v6cidr ? randomIpv6FromCidr(v6cidr) : '2001:4860:4860::8888';
+    // Endpoint from ranges + port 51820
+    const epCidr = v4cidr || pick(((cfg[code]||{}).v4 || []));
+    const endpointHost = epCidr ? randomIp4FromCidr(epCidr) : '8.8.8.8';
+    const endpoint = `${endpointHost}:51820`;
+    const nameId = String(Math.floor(100000 + Math.random() * 900000));
+    const name = `NoiD${nameId}`;
+    const mtu = 1440;
+    const address = '10.66.66.2/32';
+    const allowed = '0.0.0.0/11';
+    const conf = `[Interface]
+PrivateKey = ${kp.privateKey}
+Address = ${address}
+DNS = ${dnsV4}, ${dnsFixedV4}, ${dnsV6}
+MTU = ${mtu}
+
+[Peer]
+PublicKey = ${kp.publicKey}
+Endpoint = ${endpoint}
+AllowedIPs = ${allowed}
+PersistentKeepalive = 25
+`; 
+    // persist server entry
+    try {
+      const listKey = `user:${uid}:servers`;
+      const list = (await kvGetJson(env, listKey)) || [];
+      list.unshift({ id: `${now()}`, type: 'wg', country: code, name, endpoint, created_at: now() });
+      if (list.length > 200) list.length = 200;
+      await kvPutJson(env, listKey, list);
+    } catch (_) {}
+    // send conf as file
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('document', new Blob([conf], { type: 'text/plain' }), `${name}.conf`);
+    form.append('caption', `${countryFlag(code)} وایرگارد اختصاصی (${dnsCountryLabel(code)})\nنام: ${name}`);
+    const res = await tgUpload('sendDocument', form);
+    if (!res || !res.ok) { await tgApi('sendMessage', { chat_id: chatId, text: 'ارسال فایل با خطا مواجه شد.' }); }
     return;
   }
   if (data.startsWith('SUPREPLY:') && isAdmin(uid)) {
