@@ -1877,6 +1877,7 @@ ${lines.join('\n')}
     const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
     const page = 0;
     const perPage = 12;
+    const totalPages = Math.ceil(countries.length / perPage);
     const rows = [];
     const slice = countries.slice(page*perPage, page*perPage + perPage);
     for (let i = 0; i < slice.length; i += 2) {
@@ -1887,19 +1888,25 @@ ${lines.join('\n')}
     }
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    rows.push([{ text: '▶️ صفحه بعد', callback_data: `PS:DNS_PAGE:${page+1}` }]);
+    if (totalPages > 1) {
+      const label = `${page+1}/${totalPages} صفحه ${page+1} از ${totalPages}`;
+      const nav = [{ text: label, callback_data: 'NOOP' }];
+      if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:DNS_PAGE:${page+1}` });
+      rows.push(nav);
+    }
     await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای دی ان اس اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
     return;
   }
   if (data.startsWith('PS:DNS_PAGE:')) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
-    const totalPages = Math.ceil(countries.length / 12);
+    const perPage = 12;
+    const totalPages = Math.ceil(countries.length / perPage);
     let page = parseInt(data.split(':')[2], 10) || 0;
     if (page < 0) page = 0;
     if (page >= totalPages) page = totalPages - 1;
-    const start = page * 12;
-    const slice = countries.slice(start, start + 12);
+    const start = page * perPage;
+    const slice = countries.slice(start, start + perPage);
     const rows = [];
     for (let i = 0; i < slice.length; i += 2) {
       const c1 = slice[i]; const c2 = slice[i+1];
@@ -1907,10 +1914,14 @@ ${lines.join('\n')}
       if (c2) r.push({ text: `${countryFlag(c2)} ${dnsCountryLabel(c2)}`, callback_data: `PS:DNS:${c2}` });
       rows.push(r);
     }
-    const nav = [];
-    if (page > 0) nav.push({ text: '◀️ صفحه قبل', callback_data: `PS:DNS_PAGE:${page-1}` });
-    if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:DNS_PAGE:${page+1}` });
-    if (nav.length) rows.push(nav);
+    if (totalPages > 1) {
+      const label = `${page+1}/${totalPages} صفحه ${page+1} از ${totalPages}`;
+      const nav = [];
+      if (page > 0) nav.push({ text: '◀️ صفحه قبل', callback_data: `PS:DNS_PAGE:${page-1}` });
+      nav.push({ text: label, callback_data: 'NOOP' });
+      if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:DNS_PAGE:${page+1}` });
+      rows.push(nav);
+    }
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
     await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای دی ان اس اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
@@ -2111,6 +2122,7 @@ ${lines.join('\n')}
     const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
     const page = 0;
     const perPage = 12;
+    const totalPages = Math.ceil(countries.length / perPage);
     const rows = [];
     const slice = countries.slice(page*perPage, page*perPage + perPage);
     for (let i = 0; i < slice.length; i += 2) {
@@ -2121,19 +2133,25 @@ ${lines.join('\n')}
     }
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    rows.push([{ text: '▶️ صفحه بعد', callback_data: `PS:WG_PAGE:${page+1}` }]);
+    if (totalPages > 1) {
+      const label = `${page+1}/${totalPages} صفحه ${page+1} از ${totalPages}`;
+      const nav = [{ text: label, callback_data: 'NOOP' }];
+      if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:WG_PAGE:${page+1}` });
+      rows.push(nav);
+    }
     await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای وایرگارد اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
     return;
   }
   if (data.startsWith('PS:WG_PAGE:')) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
-    const totalPages = Math.ceil(countries.length / 12);
+    const perPage = 12;
+    const totalPages = Math.ceil(countries.length / perPage);
     let page = parseInt(data.split(':')[2], 10) || 0;
     if (page < 0) page = 0;
     if (page >= totalPages) page = totalPages - 1;
-    const start = page * 12;
-    const slice = countries.slice(start, start + 12);
+    const start = page * perPage;
+    const slice = countries.slice(start, start + perPage);
     const rows = [];
     for (let i = 0; i < slice.length; i += 2) {
       const c1 = slice[i]; const c2 = slice[i+1];
@@ -2141,10 +2159,14 @@ ${lines.join('\n')}
       if (c2) r.push({ text: `${countryFlag(c2)} ${dnsCountryLabel(c2)}`, callback_data: `PS:WG:${c2}` });
       rows.push(r);
     }
-    const nav = [];
-    if (page > 0) nav.push({ text: '◀️ صفحه قبل', callback_data: `PS:WG_PAGE:${page-1}` });
-    if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:WG_PAGE:${page+1}` });
-    if (nav.length) rows.push(nav);
+    if (totalPages > 1) {
+      const label = `${page+1}/${totalPages} صفحه ${page+1} از ${totalPages}`;
+      const nav = [];
+      if (page > 0) nav.push({ text: '◀️ صفحه قبل', callback_data: `PS:WG_PAGE:${page-1}` });
+      nav.push({ text: label, callback_data: 'NOOP' });
+      if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:WG_PAGE:${page+1}` });
+      rows.push(nav);
+    }
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
     await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای وایرگارد اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
