@@ -400,7 +400,9 @@ async function getSettings(env) {
     daily_limit: Number(s.daily_limit || 0) || 0,
     button_labels: s.button_labels || {},
     disabled_buttons: s.disabled_buttons || {},
-    disabled_locations: s.disabled_locations || { dns: {}, wg: {} }
+    disabled_locations: s.disabled_locations || { dns: {}, wg: {} },
+    cost_dns: Number.isFinite(Number(s.cost_dns)) ? Number(s.cost_dns) : 1,
+    cost_wg: Number.isFinite(Number(s.cost_wg)) ? Number(s.cost_wg) : 2
   };
   SETTINGS_MEMO_AT = nowTs;
   return SETTINGS_MEMO;
@@ -569,12 +571,6 @@ function buildAdminPanelKeyboard() {
   ]);
   rows.push([
     { text: '💳 مدیریت پرداخت‌ها', callback_data: 'ADMIN:PAYMENTS' }
-  ]);
-  rows.push([
-    { text: '🚫 غیرفعال‌سازی دکمه‌ها', callback_data: 'ADMIN:DISABLE_BTNS' }
-  ]);
-  rows.push([
-    { text: '🌐 وضعیت لوکیشن‌ها', callback_data: 'ADMIN:DISABLE_LOCS' }
   ]);
   rows.push([
     { text: '🧾 مدیریت تیکت‌ها', callback_data: 'ADMIN:TICKETS' }
@@ -1241,6 +1237,26 @@ async function onMessage(msg, env) {
       await tgApi('sendMessage', { chat_id: chatId, text: '✅ محدودیت روزانه تنظیم شد.' });
       return;
     }
+    if (session.awaiting === 'set_cost_dns' && isAdmin(uid) && text) {
+      const n = Number(text.trim());
+      if (!Number.isFinite(n) || n < 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
+      const s = await getSettings(env);
+      s.cost_dns = n;
+      await setSettings(env, s);
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: '✅ هزینه DNS اختصاصی به‌روزرسانی شد.' });
+      return;
+    }
+    if (session.awaiting === 'set_cost_wg' && isAdmin(uid) && text) {
+      const n = Number(text.trim());
+      if (!Number.isFinite(n) || n < 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر.' }); return; }
+      const s = await getSettings(env);
+      s.cost_wg = n;
+      await setSettings(env, s);
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: '✅ هزینه وایرگارد اختصاصی به‌روزرسانی شد.' });
+      return;
+    }
     if (session.awaiting === 'set_buttons' && isAdmin(uid) && text) {
       try {
         const obj = JSON.parse(text);
@@ -1858,19 +1874,46 @@ ${lines.join('\n')}
   }
   if (data === 'PS:DNS') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    const kb = { inline_keyboard: [
-      [{ text: `${countryFlag('ES')} ${dnsCountryLabel('ES')}`, callback_data: 'PS:DNS:ES' }, { text: `${countryFlag('DE')} ${dnsCountryLabel('DE')}`, callback_data: 'PS:DNS:DE' }],
-      [{ text: `${countryFlag('FR')} ${dnsCountryLabel('FR')}`, callback_data: 'PS:DNS:FR' }, { text: `${countryFlag('PH')} ${dnsCountryLabel('PH')}`, callback_data: 'PS:DNS:PH' }],
-      [{ text: `${countryFlag('JP')} ${dnsCountryLabel('JP')}`, callback_data: 'PS:DNS:JP' }, { text: `${countryFlag('TR')} ${dnsCountryLabel('TR')}`, callback_data: 'PS:DNS:TR' }],
-      [{ text: `${countryFlag('SE')} ${dnsCountryLabel('SE')}`, callback_data: 'PS:DNS:SE' }],
-      // Newly added countries
-      [{ text: `${countryFlag('NL')} ${dnsCountryLabel('NL')}`, callback_data: 'PS:DNS:NL' }, { text: `${countryFlag('DK')} ${dnsCountryLabel('DK')}`, callback_data: 'PS:DNS:DK' }],
-      [{ text: `${countryFlag('BE')} ${dnsCountryLabel('BE')}`, callback_data: 'PS:DNS:BE' }, { text: `${countryFlag('CH')} ${dnsCountryLabel('CH')}`, callback_data: 'PS:DNS:CH' }],
-      [{ text: `${countryFlag('CN')} ${dnsCountryLabel('CN')}`, callback_data: 'PS:DNS:CN' }],
-      [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
-      [{ text: '🏠 منو', callback_data: 'MENU' }]
-    ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای سرور اختصاصی را انتخاب کنید:', reply_markup: kb });
+    const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
+    const page = 0;
+    const perPage = 12;
+    const rows = [];
+    const slice = countries.slice(page*perPage, page*perPage + perPage);
+    for (let i = 0; i < slice.length; i += 2) {
+      const c1 = slice[i]; const c2 = slice[i+1];
+      const r = [{ text: `${countryFlag(c1)} ${dnsCountryLabel(c1)}`, callback_data: `PS:DNS:${c1}` }];
+      if (c2) r.push({ text: `${countryFlag(c2)} ${dnsCountryLabel(c2)}`, callback_data: `PS:DNS:${c2}` });
+      rows.push(r);
+    }
+    rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    rows.push([{ text: '▶️ صفحه بعد', callback_data: `PS:DNS_PAGE:${page+1}` }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای سرور اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data.startsWith('PS:DNS_PAGE:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
+    const totalPages = Math.ceil(countries.length / 12);
+    let page = parseInt(data.split(':')[2], 10) || 0;
+    if (page < 0) page = 0;
+    if (page >= totalPages) page = totalPages - 1;
+    const start = page * 12;
+    const slice = countries.slice(start, start + 12);
+    const rows = [];
+    for (let i = 0; i < slice.length; i += 2) {
+      const c1 = slice[i]; const c2 = slice[i+1];
+      const r = [{ text: `${countryFlag(c1)} ${dnsCountryLabel(c1)}`, callback_data: `PS:DNS:${c1}` }];
+      if (c2) r.push({ text: `${countryFlag(c2)} ${dnsCountryLabel(c2)}`, callback_data: `PS:DNS:${c2}` });
+      rows.push(r);
+    }
+    const nav = [];
+    if (page > 0) nav.push({ text: '◀️ صفحه قبل', callback_data: `PS:DNS_PAGE:${page-1}` });
+    if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:DNS_PAGE:${page+1}` });
+    if (nav.length) rows.push(nav);
+    rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای سرور اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
     return;
   }
   if (data.startsWith('PS:DNS:')) {
@@ -1884,7 +1927,9 @@ ${lines.join('\n')}
     // ask to confirm payment of 1 diamond
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    const text = `🧩 دی ان اس اختصاصی (${dnsCountryLabel(code)})\n\n💎 هزینه: 2 الماس\n💳 آیا پرداخت انجام شود؟\n\n👤 موجودی شما: ${user.diamonds || 0}`;
+    const settings = await getSettings(env);
+    const cost = settings.cost_dns || 1;
+    const text = `🧩 دی ان اس اختصاصی (${dnsCountryLabel(code)})\n\n💎 هزینه: ${cost} الماس\n💳 آیا پرداخت انجام شود؟\n\n👤 موجودی شما: ${user.diamonds || 0}`;
     const kb = { inline_keyboard: [
       [{ text: '✅ پرداخت و دریافت', callback_data: `PS:DNSCONF:${code}` }],
       [{ text: '❌ انصراف', callback_data: 'PS:DNS' }]
@@ -1902,11 +1947,13 @@ ${lines.join('\n')}
     }
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    if ((user.diamonds || 0) < 2) {
-      await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این سرویس 2 الماس هزینه دارد.' });
+    const settings = await getSettings(env);
+    const cost = settings.cost_dns || 1;
+    if ((user.diamonds || 0) < cost) {
+      await tgApi('sendMessage', { chat_id: chatId, text: `⚠️ الماس کافی نیست. این سرویس ${cost} الماس هزینه دارد.` });
       return;
     }
-    user.diamonds = (user.diamonds || 0) - 2;
+    user.diamonds = (user.diamonds || 0) - cost;
     await kvPutJson(env, userKey, user);
     let addrs;
     try {
@@ -1983,19 +2030,46 @@ ${lines.join('\n')}
   }
   if (data === 'PS:WG') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    const kb = { inline_keyboard: [
-      [{ text: `${countryFlag('ES')} ${dnsCountryLabel('ES')}`, callback_data: 'PS:WG:ES' }, { text: `${countryFlag('DE')} ${dnsCountryLabel('DE')}`, callback_data: 'PS:WG:DE' }],
-      [{ text: `${countryFlag('FR')} ${dnsCountryLabel('FR')}`, callback_data: 'PS:WG:FR' }, { text: `${countryFlag('PH')} ${dnsCountryLabel('PH')}`, callback_data: 'PS:WG:PH' }],
-      [{ text: `${countryFlag('JP')} ${dnsCountryLabel('JP')}`, callback_data: 'PS:WG:JP' }, { text: `${countryFlag('TR')} ${dnsCountryLabel('TR')}`, callback_data: 'PS:WG:TR' }],
-      [{ text: `${countryFlag('SE')} ${dnsCountryLabel('SE')}`, callback_data: 'PS:WG:SE' }],
-      // Newly added countries
-      [{ text: `${countryFlag('NL')} ${dnsCountryLabel('NL')}`, callback_data: 'PS:WG:NL' }, { text: `${countryFlag('DK')} ${dnsCountryLabel('DK')}`, callback_data: 'PS:WG:DK' }],
-      [{ text: `${countryFlag('BE')} ${dnsCountryLabel('BE')}`, callback_data: 'PS:WG:BE' }, { text: `${countryFlag('CH')} ${dnsCountryLabel('CH')}`, callback_data: 'PS:WG:CH' }],
-      [{ text: `${countryFlag('CN')} ${dnsCountryLabel('CN')}`, callback_data: 'PS:WG:CN' }],
-      [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
-      [{ text: '🏠 منو', callback_data: 'MENU' }]
-    ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای وایرگارد اختصاصی را انتخاب کنید:', reply_markup: kb });
+    const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
+    const page = 0;
+    const perPage = 12;
+    const rows = [];
+    const slice = countries.slice(page*perPage, page*perPage + perPage);
+    for (let i = 0; i < slice.length; i += 2) {
+      const c1 = slice[i]; const c2 = slice[i+1];
+      const r = [{ text: `${countryFlag(c1)} ${dnsCountryLabel(c1)}`, callback_data: `PS:WG:${c1}` }];
+      if (c2) r.push({ text: `${countryFlag(c2)} ${dnsCountryLabel(c2)}`, callback_data: `PS:WG:${c2}` });
+      rows.push(r);
+    }
+    rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    rows.push([{ text: '▶️ صفحه بعد', callback_data: `PS:WG_PAGE:${page+1}` }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای وایرگارد اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data.startsWith('PS:WG_PAGE:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
+    const totalPages = Math.ceil(countries.length / 12);
+    let page = parseInt(data.split(':')[2], 10) || 0;
+    if (page < 0) page = 0;
+    if (page >= totalPages) page = totalPages - 1;
+    const start = page * 12;
+    const slice = countries.slice(start, start + 12);
+    const rows = [];
+    for (let i = 0; i < slice.length; i += 2) {
+      const c1 = slice[i]; const c2 = slice[i+1];
+      const r = [{ text: `${countryFlag(c1)} ${dnsCountryLabel(c1)}`, callback_data: `PS:WG:${c1}` }];
+      if (c2) r.push({ text: `${countryFlag(c2)} ${dnsCountryLabel(c2)}`, callback_data: `PS:WG:${c2}` });
+      rows.push(r);
+    }
+    const nav = [];
+    if (page > 0) nav.push({ text: '◀️ صفحه قبل', callback_data: `PS:WG_PAGE:${page-1}` });
+    if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:WG_PAGE:${page+1}` });
+    if (nav.length) rows.push(nav);
+    rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای وایرگارد اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
     return;
   }
   if (data.startsWith('PS:WG:')) {
@@ -2009,7 +2083,9 @@ ${lines.join('\n')}
     // confirm 1-diamond charge
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    const text = `🛰️ وایرگارد اختصاصی (${dnsCountryLabel(code)})\n\n💎 هزینه: 2 الماس\n💳 آیا پرداخت انجام شود؟\n\n👤 موجودی شما: ${user.diamonds || 0}`;
+    const settings = await getSettings(env);
+    const cost = settings.cost_wg || 2;
+    const text = `🛰️ وایرگارد اختصاصی (${dnsCountryLabel(code)})\n\n💎 هزینه: ${cost} الماس\n💳 آیا پرداخت انجام شود؟\n\n👤 موجودی شما: ${user.diamonds || 0}`;
     const kb = { inline_keyboard: [
       [{ text: '✅ پرداخت و دریافت', callback_data: `PS:WGCONF:${code}` }],
       [{ text: '❌ انصراف', callback_data: 'PS:WG' }]
@@ -2027,8 +2103,10 @@ ${lines.join('\n')}
     }
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    if ((user.diamonds || 0) < 2) { await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این سرویس 2 الماس هزینه دارد.' }); return; }
-    user.diamonds = (user.diamonds || 0) - 2; await kvPutJson(env, userKey, user);
+    const settings = await getSettings(env);
+    const cost = settings.cost_wg || 2;
+    if ((user.diamonds || 0) < cost) { await tgApi('sendMessage', { chat_id: chatId, text: `⚠️ الماس کافی نیست. این سرویس ${cost} الماس هزینه دارد.` }); return; }
+    user.diamonds = (user.diamonds || 0) - cost; await kvPutJson(env, userKey, user);
     // generate keys
     const kp = await generateWgKeypairBase64();
     // DNS: one from country ranges + fixed 10.202.10.10 + one IPv6
@@ -3163,13 +3241,35 @@ PersistentKeepalive = 25
   if (data === 'ADMIN:SETTINGS' && isAdmin(uid)) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const s = await getSettings(env);
-    await tgApi('sendMessage', { chat_id: chatId, text: `⚙️ تنظیمات سرویس:\n- محدودیت روزانه دانلود: ${s.daily_limit}\n- پیام خوش‌آمد: ${s.welcome_message ? 'تعریف شده' : '—'}`, reply_markup: { inline_keyboard: [
+    await tgApi('sendMessage', { chat_id: chatId, text: `⚙️ تنظیمات سرویس:\n- محدودیت روزانه دانلود: ${s.daily_limit}\n- پیام خوش‌آمد: ${s.welcome_message ? 'تعریف شده' : '—'}\n- هزینه DNS اختصاصی: ${s.cost_dns} الماس\n- هزینه وایرگارد اختصاصی: ${s.cost_wg} الماس`, reply_markup: { inline_keyboard: [
       [{ text: '✏️ ویرایش پیام خوش‌آمد', callback_data: 'ADMIN:SET:WELCOME' }, { text: '🔢 تغییر سقف روزانه', callback_data: 'ADMIN:SET:DAILY' }],
       [{ text: '📝 ویرایش عنوان دکمه‌ها', callback_data: 'ADMIN:SET:BUTTONS' }],
+      [{ text: '💎 تغییر هزینه‌ها', callback_data: 'ADMIN:SET:COSTS' }],
       [{ text: '🚫 مدیریت دکمه‌های غیرفعال', callback_data: 'ADMIN:DISABLE_BTNS' }],
       [{ text: '🌐 وضعیت لوکیشن‌ها', callback_data: 'ADMIN:DISABLE_LOCS' }],
       [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]
     ] } });
+    return;
+  }
+  if (data === 'ADMIN:SET:COSTS' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const s = await getSettings(env);
+    const rows = [
+      [{ text: `DNS: ${s.cost_dns} الماس`, callback_data: 'NOOP' }, { text: '✏️ تغییر DNS', callback_data: 'ADMIN:SET:COST:DNS' }],
+      [{ text: `WG: ${s.cost_wg} الماس`, callback_data: 'NOOP' }, { text: '✏️ تغییر WG', callback_data: 'ADMIN:SET:COST:WG' }],
+      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:SETTINGS' }]
+    ];
+    await tgApi('sendMessage', { chat_id: chatId, text: '💎 تنظیم هزینه سرویس‌ها:', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data === 'ADMIN:SET:COST:DNS' && isAdmin(uid)) {
+    await setSession(env, uid, { awaiting: 'set_cost_dns' });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار جدید هزینه DNS اختصاصی (الماس) را وارد کنید:' });
+    return;
+  }
+  if (data === 'ADMIN:SET:COST:WG' && isAdmin(uid)) {
+    await setSession(env, uid, { awaiting: 'set_cost_wg' });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار جدید هزینه وایرگارد اختصاصی (الماس) را وارد کنید:' });
     return;
   }
   if (data === 'ADMIN:DISABLE_LOCS' && isAdmin(uid)) {
