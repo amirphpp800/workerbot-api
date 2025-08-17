@@ -353,6 +353,11 @@ function dnsCountryLabel(code) {
   if (code === 'TR') return 'ترکیه';
   if (code === 'PH') return 'فیلیپین';
   if (code === 'JP') return 'ژاپن';
+  if (code === 'NL') return 'هلند';
+  if (code === 'DK') return 'دانمارک';
+  if (code === 'BE') return 'بلژیک';
+  if (code === 'CH') return 'سوئیس';
+  if (code === 'CN') return 'چین';
   return code;
 }
 function countryFlag(code) {
@@ -363,6 +368,11 @@ function countryFlag(code) {
   if (code === 'TR') return '🇹🇷';
   if (code === 'PH') return '🇵🇭';
   if (code === 'JP') return '🇯🇵';
+  if (code === 'NL') return '🇳🇱';
+  if (code === 'DK') return '🇩🇰';
+  if (code === 'BE') return '🇧🇪';
+  if (code === 'CH') return '🇨🇭';
+  if (code === 'CN') return '🇨🇳';
   return '';
 }
 function base64UrlToBase64(u) {
@@ -389,7 +399,8 @@ async function getSettings(env) {
     welcome_message: s.welcome_message || '',
     daily_limit: Number(s.daily_limit || 0) || 0,
     button_labels: s.button_labels || {},
-    disabled_buttons: s.disabled_buttons || {}
+    disabled_buttons: s.disabled_buttons || {},
+    disabled_locations: s.disabled_locations || { dns: {}, wg: {} }
   };
   SETTINGS_MEMO_AT = nowTs;
   return SETTINGS_MEMO;
@@ -405,6 +416,16 @@ function isButtonDisabledCached(settings, key) {
 async function isButtonDisabled(env, key) {
   const s = await getSettings(env);
   return isButtonDisabledCached(s, key);
+}
+function isLocationDisabledCached(settings, service, code) {
+  const map = settings && settings.disabled_locations || { dns: {}, wg: {} };
+  const svc = String(service || '').toLowerCase();
+  const svcMap = map[svc] || {};
+  return !!svcMap[code];
+}
+async function isLocationDisabled(env, service, code) {
+  const s = await getSettings(env);
+  return isLocationDisabledCached(s, service, code);
 }
 function labelFor(labels, key, fallback) {
   if (!labels) return fallback;
@@ -551,6 +572,9 @@ function buildAdminPanelKeyboard() {
   ]);
   rows.push([
     { text: '🚫 غیرفعال‌سازی دکمه‌ها', callback_data: 'ADMIN:DISABLE_BTNS' }
+  ]);
+  rows.push([
+    { text: '🌐 وضعیت لوکیشن‌ها', callback_data: 'ADMIN:DISABLE_LOCS' }
   ]);
   rows.push([
     { text: '🧾 مدیریت تیکت‌ها', callback_data: 'ADMIN:TICKETS' }
@@ -1835,10 +1859,14 @@ ${lines.join('\n')}
   if (data === 'PS:DNS') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
-      [{ text: '🇪🇸 اسپانیا', callback_data: 'PS:DNS:ES' }, { text: '🇩🇪 آلمان', callback_data: 'PS:DNS:DE' }],
-      [{ text: '🇫🇷 فرانسه', callback_data: 'PS:DNS:FR' }, { text: '🇵🇭 فیلیپین', callback_data: 'PS:DNS:PH' }],
-      [{ text: '🇯🇵 ژاپن', callback_data: 'PS:DNS:JP' }, { text: '🇹🇷 ترکیه', callback_data: 'PS:DNS:TR' }],
-      [{ text: '🇸🇪 سوئد', callback_data: 'PS:DNS:SE' }],
+      [{ text: `${countryFlag('ES')} ${dnsCountryLabel('ES')}`, callback_data: 'PS:DNS:ES' }, { text: `${countryFlag('DE')} ${dnsCountryLabel('DE')}`, callback_data: 'PS:DNS:DE' }],
+      [{ text: `${countryFlag('FR')} ${dnsCountryLabel('FR')}`, callback_data: 'PS:DNS:FR' }, { text: `${countryFlag('PH')} ${dnsCountryLabel('PH')}`, callback_data: 'PS:DNS:PH' }],
+      [{ text: `${countryFlag('JP')} ${dnsCountryLabel('JP')}`, callback_data: 'PS:DNS:JP' }, { text: `${countryFlag('TR')} ${dnsCountryLabel('TR')}`, callback_data: 'PS:DNS:TR' }],
+      [{ text: `${countryFlag('SE')} ${dnsCountryLabel('SE')}`, callback_data: 'PS:DNS:SE' }],
+      // Newly added countries
+      [{ text: `${countryFlag('NL')} ${dnsCountryLabel('NL')}`, callback_data: 'PS:DNS:NL' }, { text: `${countryFlag('DK')} ${dnsCountryLabel('DK')}`, callback_data: 'PS:DNS:DK' }],
+      [{ text: `${countryFlag('BE')} ${dnsCountryLabel('BE')}`, callback_data: 'PS:DNS:BE' }, { text: `${countryFlag('CH')} ${dnsCountryLabel('CH')}`, callback_data: 'PS:DNS:CH' }],
+      [{ text: `${countryFlag('CN')} ${dnsCountryLabel('CN')}`, callback_data: 'PS:DNS:CN' }],
       [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
@@ -1848,6 +1876,11 @@ ${lines.join('\n')}
   if (data.startsWith('PS:DNS:')) {
     const code = data.split(':')[2];
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    // location disable check
+    if (await isLocationDisabled(env, 'dns', code)) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش درحال توسعه و بروزرسانی می‌باشد و موقتا غیر فعال است.' });
+      return;
+    }
     // ask to confirm payment of 1 diamond
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
@@ -1862,6 +1895,11 @@ ${lines.join('\n')}
   if (data.startsWith('PS:DNSCONF:')) {
     const code = data.split(':')[2];
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    // location disable check safety on confirm
+    if (await isLocationDisabled(env, 'dns', code)) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش درحال توسعه و بروزرسانی میباشد و موقتا غیر فعال' });
+      return;
+    }
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
     if ((user.diamonds || 0) < 2) {
@@ -1946,10 +1984,14 @@ ${lines.join('\n')}
   if (data === 'PS:WG') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
-      [{ text: '🇪🇸 اسپانیا', callback_data: 'PS:WG:ES' }, { text: '🇩🇪 آلمان', callback_data: 'PS:WG:DE' }],
-      [{ text: '🇫🇷 فرانسه', callback_data: 'PS:WG:FR' }, { text: '🇵🇭 فیلیپین', callback_data: 'PS:WG:PH' }],
-      [{ text: '🇯🇵 ژاپن', callback_data: 'PS:WG:JP' }, { text: '🇹🇷 ترکیه', callback_data: 'PS:WG:TR' }],
-      [{ text: '🇸🇪 سوئد', callback_data: 'PS:WG:SE' }],
+      [{ text: `${countryFlag('ES')} ${dnsCountryLabel('ES')}`, callback_data: 'PS:WG:ES' }, { text: `${countryFlag('DE')} ${dnsCountryLabel('DE')}`, callback_data: 'PS:WG:DE' }],
+      [{ text: `${countryFlag('FR')} ${dnsCountryLabel('FR')}`, callback_data: 'PS:WG:FR' }, { text: `${countryFlag('PH')} ${dnsCountryLabel('PH')}`, callback_data: 'PS:WG:PH' }],
+      [{ text: `${countryFlag('JP')} ${dnsCountryLabel('JP')}`, callback_data: 'PS:WG:JP' }, { text: `${countryFlag('TR')} ${dnsCountryLabel('TR')}`, callback_data: 'PS:WG:TR' }],
+      [{ text: `${countryFlag('SE')} ${dnsCountryLabel('SE')}`, callback_data: 'PS:WG:SE' }],
+      // Newly added countries
+      [{ text: `${countryFlag('NL')} ${dnsCountryLabel('NL')}`, callback_data: 'PS:WG:NL' }, { text: `${countryFlag('DK')} ${dnsCountryLabel('DK')}`, callback_data: 'PS:WG:DK' }],
+      [{ text: `${countryFlag('BE')} ${dnsCountryLabel('BE')}`, callback_data: 'PS:WG:BE' }, { text: `${countryFlag('CH')} ${dnsCountryLabel('CH')}`, callback_data: 'PS:WG:CH' }],
+      [{ text: `${countryFlag('CN')} ${dnsCountryLabel('CN')}`, callback_data: 'PS:WG:CN' }],
       [{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
@@ -1959,6 +2001,11 @@ ${lines.join('\n')}
   if (data.startsWith('PS:WG:')) {
     const code = data.split(':')[2];
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    // location disable check
+    if (await isLocationDisabled(env, 'wg', code)) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش درحال توسعه و بروزرسانی می‌باشد و موقتا غیر فعال است.' });
+      return;
+    }
     // confirm 1-diamond charge
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
@@ -1973,6 +2020,11 @@ ${lines.join('\n')}
   if (data.startsWith('PS:WGCONF:')) {
     const code = data.split(':')[2];
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    // location disable check safety on confirm
+    if (await isLocationDisabled(env, 'wg', code)) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش درحال توسعه و بروزرسانی می‌باشد و موقتا غیر فعال است.' });
+      return;
+    }
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
     if ((user.diamonds || 0) < 2) { await tgApi('sendMessage', { chat_id: chatId, text: '⚠️ الماس کافی نیست. این سرویس 2 الماس هزینه دارد.' }); return; }
@@ -3115,8 +3167,50 @@ PersistentKeepalive = 25
       [{ text: '✏️ ویرایش پیام خوش‌آمد', callback_data: 'ADMIN:SET:WELCOME' }, { text: '🔢 تغییر سقف روزانه', callback_data: 'ADMIN:SET:DAILY' }],
       [{ text: '📝 ویرایش عنوان دکمه‌ها', callback_data: 'ADMIN:SET:BUTTONS' }],
       [{ text: '🚫 مدیریت دکمه‌های غیرفعال', callback_data: 'ADMIN:DISABLE_BTNS' }],
+      [{ text: '🌐 وضعیت لوکیشن‌ها', callback_data: 'ADMIN:DISABLE_LOCS' }],
       [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]
     ] } });
+    return;
+  }
+  if (data === 'ADMIN:DISABLE_LOCS' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const s = await getSettings(env);
+    const map = s.disabled_locations || { dns: {}, wg: {} };
+    const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
+    const dnsRows = countries.map(c => ([{ text: `${map.dns?.[c] ? '🟢 فعال‌سازی' : '🔴 غیرفعال'} DNS — ${countryFlag(c)} ${dnsCountryLabel(c)}`, callback_data: `ADMIN:LOC_TOGGLE:${c}:dns` }]));
+    const wgRows = countries.map(c => ([{ text: `${map.wg?.[c] ? '🟢 فعال‌سازی' : '🔴 غیرفعال'} WG — ${countryFlag(c)} ${dnsCountryLabel(c)}`, callback_data: `ADMIN:LOC_TOGGLE:${c}:wg` }]));
+    const rows = [
+      [{ text: '🔽 DNS', callback_data: 'NOOP' }],
+      ...dnsRows,
+      [{ text: '🔽 WireGuard', callback_data: 'NOOP' }],
+      ...wgRows,
+      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:SETTINGS' }]
+    ];
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 مدیریت وضعیت لوکیشن‌ها:', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data.startsWith('ADMIN:LOC_TOGGLE:') && isAdmin(uid)) {
+    const [, , code, svc] = data.split(':');
+    const s = await getSettings(env);
+    const map = s.disabled_locations || { dns: {}, wg: {} };
+    const svcKey = (svc || '').toLowerCase();
+    map[svcKey] = map[svcKey] || {};
+    map[svcKey][code] = !map[svcKey][code];
+    s.disabled_locations = map;
+    await setSettings(env, s);
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'به‌روزرسانی شد' });
+    // Re-render list
+    const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
+    const dnsRows = countries.map(c => ([{ text: `${map.dns?.[c] ? '🟢 فعال‌سازی' : '🔴 غیرفعال'} DNS — ${countryFlag(c)} ${dnsCountryLabel(c)}`, callback_data: `ADMIN:LOC_TOGGLE:${c}:dns` }]));
+    const wgRows = countries.map(c => ([{ text: `${map.wg?.[c] ? '🟢 فعال‌سازی' : '🔴 غیرفعال'} WG — ${countryFlag(c)} ${dnsCountryLabel(c)}`, callback_data: `ADMIN:LOC_TOGGLE:${c}:wg` }]));
+    const rows = [
+      [{ text: '🔽 DNS', callback_data: 'NOOP' }],
+      ...dnsRows,
+      [{ text: '🔽 WireGuard', callback_data: 'NOOP' }],
+      ...wgRows,
+      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:SETTINGS' }]
+    ];
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 مدیریت وضعیت لوکیشن‌ها:', reply_markup: { inline_keyboard: rows } });
     return;
   }
   if (data === 'ADMIN:DISABLE_BTNS' && isAdmin(uid)) {
