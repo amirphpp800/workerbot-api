@@ -1888,7 +1888,7 @@ ${lines.join('\n')}
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
     rows.push([{ text: '▶️ صفحه بعد', callback_data: `PS:DNS_PAGE:${page+1}` }]);
-    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای سرور اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای دی ان اس اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
     return;
   }
   if (data.startsWith('PS:DNS_PAGE:')) {
@@ -1913,7 +1913,7 @@ ${lines.join('\n')}
     if (nav.length) rows.push(nav);
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای سرور اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
+    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای دی ان اس اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
     return;
   }
   if (data.startsWith('PS:DNS:')) {
@@ -2004,6 +2004,84 @@ ${lines.join('\n')}
     }
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
     await tgApi('sendMessage', { chat_id: chatId, text: '🧩 سرورهای من — روی کشور کلیک کنید:', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data === 'MY_CONFIGS') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const listKey = `user:${uid}:servers`;
+    const list = (await kvGetJson(env, listKey)) || [];
+    if (!list.length) { await tgApi('sendMessage', { chat_id: chatId, text: 'هنوز کانفیگی ندارید.' }); return; }
+    const dnsItems = list.filter(s => (s.type||'dns') === 'dns');
+    const wgItems = list.filter(s => (s.type||'dns') === 'wg');
+    const max = Math.max(dnsItems.length, wgItems.length);
+    const rows = [];
+    for (let i = 0; i < max; i++) {
+      const left = wgItems[i];
+      const right = dnsItems[i];
+      const row = [];
+      // Left: WG
+      if (left) {
+        const label = `${countryFlag(left.country)} ${dnsCountryLabel(left.country)} — WG${left.name ? ` (${left.name})` : ''}`;
+        row.push({ text: label, callback_data: `MYCFG:WG:${left.id}` });
+      } else {
+        row.push({ text: ' ', callback_data: 'NOOP' });
+      }
+      // Right: DNS
+      if (right) {
+        const label = `${countryFlag(right.country)} ${dnsCountryLabel(right.country)} — DNS`;
+        row.push({ text: label, callback_data: `MYCFG:DNS:${right.id}` });
+      } else {
+        row.push({ text: ' ', callback_data: 'NOOP' });
+      }
+      rows.push(row);
+    }
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: '🧩 کانفیگ‌های من — سمت چپ: WG | سمت راست: DNS', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data.startsWith('MYCFG:DNS:')) {
+    const id = data.split(':')[2];
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const listKey = `user:${uid}:servers`;
+    const list = (await kvGetJson(env, listKey)) || [];
+    const item = list.find(s => String(s.id) === String(id) && (s.type||'dns') === 'dns');
+    if (!item) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد یافت نشد.' }); return; }
+    const text = `${countryFlag(item.country)} DNS — ${dnsCountryLabel(item.country)}\n\nIPv4: \`${item.v4}\`\nIPv6-1: \`${(item.v6&&item.v6[0])||'-'}\`\nIPv6-2: \`${(item.v6&&item.v6[1])||'-'}\``;
+    await tgApi('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown' });
+    return;
+  }
+  if (data.startsWith('MYCFG:WG:')) {
+    const id = data.split(':')[2];
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const listKey = `user:${uid}:servers`;
+    const list = (await kvGetJson(env, listKey)) || [];
+    const item = list.find(s => String(s.id) === String(id) && (s.type||'dns') === 'wg');
+    if (!item) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد یافت نشد.' }); return; }
+    // Send the stored .conf if present; otherwise build from stored fields
+    if (item.conf) {
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      form.append('document', new Blob([item.conf], { type: 'text/plain' }), `${(item.name||'WG')}.conf`);
+      form.append('caption', `${countryFlag(item.country)} وایرگارد (${dnsCountryLabel(item.country)})${item.name?`\nنام: ${item.name}`:''}`);
+      const res = await tgUpload('sendDocument', form);
+      if (!res || !res.ok) { await tgApi('sendMessage', { chat_id: chatId, text: 'ارسال فایل با خطا مواجه شد.' }); }
+      return;
+    }
+    if (item.endpoint && item.name) {
+      const kp = { privateKey: 'HIDDEN', publicKey: 'HIDDEN' };
+      const mtu = 1440;
+      const address = '10.66.66.2/32';
+      const allowed = '0.0.0.0/11';
+      const conf = `[Interface]\nPrivateKey = (در زمان ساخت ذخیره نشده)\nAddress = ${address}\nDNS = 10.202.10.10\nMTU = ${mtu}\n\n[Peer]\nPublicKey = (در زمان ساخت ذخیره نشده)\nEndpoint = ${item.endpoint}\nAllowedIPs = ${allowed}\nPersistentKeepalive = 25\n`;
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      form.append('document', new Blob([conf], { type: 'text/plain' }), `${(item.name||'WG')}.conf`);
+      form.append('caption', `${countryFlag(item.country)} وایرگارد (${dnsCountryLabel(item.country)})${item.name?`\nنام: ${item.name}`:''}`);
+      const res = await tgUpload('sendDocument', form);
+      if (!res || !res.ok) { await tgApi('sendMessage', { chat_id: chatId, text: 'ارسال فایل با خطا مواجه شد.' }); }
+      return;
+    }
+    await tgApi('sendMessage', { chat_id: chatId, text: 'متاسفانه اطلاعات کافی برای ارسال کانفیگ موجود نیست.' });
     return;
   }
   if (data.startsWith('MY_SERVERS_VIEW:')) {
@@ -2373,7 +2451,7 @@ PersistentKeepalive = 25
         { text: '📨 تیکت‌های من', callback_data: 'TICKET:MY' }
       ],
       [
-        { text: '🧩 سرورهای من', callback_data: 'MY_SERVERS' },
+        { text: '🧩 کانفیگ‌های من', callback_data: 'MY_CONFIGS' },
         { text: '💸 انتقال موجودی', callback_data: 'BAL:START' }
       ],
       [
