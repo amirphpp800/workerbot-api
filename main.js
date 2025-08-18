@@ -359,6 +359,7 @@ function dnsCountryLabel(code) {
   if (code === 'BE') return 'بلژیک';
   if (code === 'CH') return 'سوئیس';
   if (code === 'CN') return 'چین';
+  if (code === 'TW') return 'تایوان';
   return code;
 }
 function countryFlag(code) {
@@ -374,6 +375,7 @@ function countryFlag(code) {
   if (code === 'BE') return '🇧🇪';
   if (code === 'CH') return '🇨🇭';
   if (code === 'CN') return '🇨🇳';
+  if (code === 'TW') return '🇹🇼';
   return '';
 }
 function base64UrlToBase64(u) {
@@ -1878,84 +1880,87 @@ ${lines.join('\n')}
   if (data === 'PS:OVPN') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const cfg = await getDnsCidrConfig(env);
-    const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
-    if (!ovpn.length) {
-      await tgApi('sendMessage', { chat_id: chatId, text: 'در حال توسعه و آماده‌سازی لوکیشن‌ها.' });
-      return;
-    }
-    const rows = [];
-    const isIp = (h) => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(String(h||''));
-    let domainFirstIdx = -1;
-    for (let i = 0; i < ovpn.length; i++) {
-      if (!isIp(ovpn[i].host)) { domainFirstIdx = i; break; }
-    }
-    if (domainFirstIdx >= 0) {
-      const s = ovpn[domainFirstIdx];
-      rows.push([{ text: `${s.host}:${s.port}`, callback_data: `PS:OVPN_SEL:${domainFirstIdx}` }]);
-    }
-    const ipIdxs = [];
-    for (let i = 0; i < ovpn.length; i++) { if (i !== domainFirstIdx && isIp(ovpn[i].host)) ipIdxs.push(i); }
-    for (let i = 0; i < ipIdxs.length; i += 2) {
-      const idx1 = ipIdxs[i];
-      const s1 = ovpn[idx1];
-      const row = [{ text: `${s1.host}:${s1.port}`, callback_data: `PS:OVPN_SEL:${idx1}` }];
-      const idx2 = ipIdxs[i+1];
-      if (idx2 !== undefined) {
-        const s2 = ovpn[idx2];
-        row.push({ text: `${s2.host}:${s2.port}`, callback_data: `PS:OVPN_SEL:${idx2}` });
-      }
-      rows.push(row);
-    }
+    const locs = cfg && cfg.OVPN && cfg.OVPN.locations ? cfg.OVPN.locations : {};
+    const codes = Object.keys(locs);
+    if (!codes.length) { await tgApi('sendMessage', { chat_id: chatId, text: 'در حال توسعه و آماده‌سازی لوکیشن‌ها.' }); return; }
+    const rows = codes.map(code => ([{ text: `${countryFlag(code)} ${dnsCountryLabel(code)}`, callback_data: `PS:OVPN_LOC:${code}` }]));
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    await tgApi('sendMessage', { chat_id: chatId, text: '🔒 OpenVPN — لوکیشن را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
+    await tgApi('sendMessage', { chat_id: chatId, text: '🔒 OpenVPN — کشور/لوکیشن را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
     return;
   }
-  if (data.startsWith('PS:OVPN_SEL:')) {
+  if (data.startsWith('PS:OVPN_LOC:')) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    const idx = Number(data.split(':')[2] || 0);
+    const code = data.split(':')[2];
     const cfg = await getDnsCidrConfig(env);
-    const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
-    if (!ovpn[idx]) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد نامعتبر.' }); return; }
-    const s = ovpn[idx];
+    const loc = cfg && cfg.OVPN && cfg.OVPN.locations && cfg.OVPN.locations[code];
+    if (!loc || !Array.isArray(loc.servers) || !loc.servers.length) { await tgApi('sendMessage', { chat_id: chatId, text: 'موردی یافت نشد.' }); return; }
+    const servers = loc.servers;
+    const rows = [];
+    const isIp = (h) => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(String(h||''));
+    let domainIdx = servers.findIndex(s => !isIp(s.host));
+    if (domainIdx >= 0) rows.push([{ text: `${servers[domainIdx].host}:${servers[domainIdx].port}`, callback_data: `PS:OVPN_SEL2:${code}:${domainIdx}` }]);
+    const ipIdxs = servers.map((_, i) => i).filter(i => i !== domainIdx && isIp(servers[i].host));
+    for (let i = 0; i < ipIdxs.length; i += 2) {
+      const a = ipIdxs[i];
+      const row = [{ text: `${servers[a].host}:${servers[a].port}`, callback_data: `PS:OVPN_SEL2:${code}:${a}` }];
+      const b = ipIdxs[i+1];
+      if (b !== undefined) row.push({ text: `${servers[b].host}:${servers[b].port}`, callback_data: `PS:OVPN_SEL2:${code}:${b}` });
+      rows.push(row);
+    }
+    rows.push([{ text: '⬅️ بازگشت', callback_data: 'PS:OVPN' }]);
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: `🔒 OpenVPN — ${countryFlag(code)} ${dnsCountryLabel(code)} — سرور را انتخاب کنید:`, reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data.startsWith('PS:OVPN_SEL2:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const parts = data.split(':');
+    const code = parts[2];
+    const idx = Number(parts[3] || 0);
+    const cfg = await getDnsCidrConfig(env);
+    const loc = cfg && cfg.OVPN && cfg.OVPN.locations && cfg.OVPN.locations[code];
+    const s = loc && loc.servers && loc.servers[idx];
     const kb = { inline_keyboard: [
-      [{ text: 'UDP', callback_data: `PS:OVPN_CONF:${idx}:udp` }, { text: 'TCP', callback_data: `PS:OVPN_CONF:${idx}:tcp` }],
-      [{ text: '⬅️ بازگشت', callback_data: 'PS:OVPN' }],
+      [{ text: 'UDP', callback_data: `PS:OVPN_CONF2:${code}:${idx}:udp` }, { text: 'TCP', callback_data: `PS:OVPN_CONF2:${code}:${idx}:tcp` }],
+      [{ text: '⬅️ بازگشت', callback_data: `PS:OVPN_LOC:${code}` }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
     await tgApi('sendMessage', { chat_id: chatId, text: `لوکیشن انتخاب شد:
-${s.host}:${s.port}
+${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
 نوع پروتکل را انتخاب کنید:`, reply_markup: kb });
     return;
   }
-  if (data.startsWith('PS:OVPN_CONF:')) {
+  if (data.startsWith('PS:OVPN_CONF2:')) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const parts = data.split(':');
-    const idx = Number(parts[2] || 0);
-    const proto = (parts[3] || 'udp').toLowerCase() === 'tcp' ? 'tcp' : 'udp';
+    const code = parts[2];
+    const idx = Number(parts[3] || 0);
+    const proto = (parts[4] || 'udp').toLowerCase() === 'tcp' ? 'tcp' : 'udp';
     const cfg = await getDnsCidrConfig(env);
-    const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
-    const s = ovpn[idx];
+    const loc = cfg && cfg.OVPN && cfg.OVPN.locations && cfg.OVPN.locations[code];
+    const s = loc && loc.servers && loc.servers[idx];
     if (!s) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد نامعتبر.' }); return; }
     const settings = await getSettings(env);
     const cost = settings.cost_ovpn || 6;
     const text = `🔒 OpenVPN\nلوکیشن: ${s.host}:${s.port}\nپروتکل: ${proto.toUpperCase()}\n\n💎 هزینه: ${cost} الماس\nآیا پرداخت انجام شود؟`;
     const kb = { inline_keyboard: [
-      [{ text: '✅ پرداخت و دریافت', callback_data: `PS:OVPN_BUY:${idx}:${proto}` }],
-      [{ text: '⬅️ بازگشت', callback_data: `PS:OVPN_SEL:${idx}` }],
+      [{ text: '✅ پرداخت و دریافت', callback_data: `PS:OVPN_BUY2:${code}:${idx}:${proto}` }],
+      [{ text: '⬅️ بازگشت', callback_data: `PS:OVPN_SEL2:${code}:${idx}` }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
     await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
     return;
   }
-  if (data.startsWith('PS:OVPN_BUY:')) {
+  if (data.startsWith('PS:OVPN_BUY2:')) {
     const parts = data.split(':');
-    const idx = Number(parts[2] || 0);
-    const chosenProto = (parts[3] || 'udp').toLowerCase() === 'tcp' ? 'tcp' : 'udp';
+    const code = parts[2];
+    const idx = Number(parts[3] || 0);
+    const chosenProto = (parts[4] || 'udp').toLowerCase() === 'tcp' ? 'tcp' : 'udp';
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const cfg = await getDnsCidrConfig(env);
-    const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
-    const s = ovpn[idx];
+    const loc = cfg && cfg.OVPN && cfg.OVPN.locations && cfg.OVPN.locations[code];
+    const s = loc && loc.servers && loc.servers[idx];
     if (!s) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد نامعتبر.' }); return; }
     // location disable check
     if (await isLocationDisabled(env, 'ovpn', s.host)) {
