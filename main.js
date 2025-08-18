@@ -400,9 +400,10 @@ async function getSettings(env) {
     daily_limit: Number(s.daily_limit || 0) || 0,
     button_labels: s.button_labels || {},
     disabled_buttons: s.disabled_buttons || {},
-    disabled_locations: s.disabled_locations || { dns: {}, wg: {} },
+    disabled_locations: s.disabled_locations || { dns: {}, wg: {}, ovpn: {} },
     cost_dns: Number.isFinite(Number(s.cost_dns)) ? Number(s.cost_dns) : 1,
-    cost_wg: Number.isFinite(Number(s.cost_wg)) ? Number(s.cost_wg) : 2
+    cost_wg: Number.isFinite(Number(s.cost_wg)) ? Number(s.cost_wg) : 2,
+    cost_ovpn: Number.isFinite(Number(s.cost_ovpn)) ? Number(s.cost_ovpn) : 6
   };
   SETTINGS_MEMO_AT = nowTs;
   return SETTINGS_MEMO;
@@ -1866,10 +1867,89 @@ ${lines.join('\n')}
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const kb = { inline_keyboard: [
       [{ text: '🧩 دی ان اس اختصاصی', callback_data: 'PS:DNS' }],
+      [{ text: '🔒 کانفیگ اوپن‌وی‌پی‌ان', callback_data: 'PS:OVPN' }],
       [{ text: '🛰 وایرگارد اختصاصی', callback_data: 'PS:WG' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
     await tgApi('sendMessage', { chat_id: chatId, text: '🛡️ سرور اختصاصی — یک گزینه را انتخاب کنید:', reply_markup: kb });
+    return;
+  }
+  if (data === 'PS:OVPN') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const cfg = await getDnsCidrConfig(env);
+    const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
+    if (!ovpn.length) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'در حال توسعه و آماده‌سازی لوکیشن‌ها.' });
+      return;
+    }
+    const rows = ovpn.map((s, idx) => ([{ text: `${s.host}:${s.port}/${s.proto}`, callback_data: `PS:OVPN_SEL:${idx}` }]));
+    rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: '🔒 OpenVPN — لوکیشن را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data.startsWith('PS:OVPN_SEL:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const idx = Number(data.split(':')[2] || 0);
+    const cfg = await getDnsCidrConfig(env);
+    const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
+    if (!ovpn[idx]) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد نامعتبر.' }); return; }
+    const s = ovpn[idx];
+    const settings = await getSettings(env);
+    const cost = settings.cost_ovpn || 6;
+    const text = `🔒 OpenVPN\nلوکیشن: ${s.host}:${s.port}/${s.proto}\n\n💎 هزینه: ${cost} الماس\nآیا پرداخت انجام شود؟`;
+    const kb = { inline_keyboard: [
+      [{ text: '✅ پرداخت و دریافت', callback_data: `PS:OVPN_BUY:${idx}` }],
+      [{ text: '⬅️ بازگشت', callback_data: 'PS:OVPN' }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('PS:OVPN_BUY:')) {
+    const idx = Number(data.split(':')[2] || 0);
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const cfg = await getDnsCidrConfig(env);
+    const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
+    const s = ovpn[idx];
+    if (!s) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد نامعتبر.' }); return; }
+    // location disable check
+    if (await isLocationDisabled(env, 'ovpn', s.host)) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش درحال توسعه و بروزرسانی می‌باشد و موقتا غیر فعال است.' });
+      return;
+    }
+    const userKey = `user:${uid}`;
+    const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
+    const settings = await getSettings(env);
+    const cost = settings.cost_ovpn || 6;
+    if ((user.diamonds || 0) < cost) {
+      await tgApi('sendMessage', { chat_id: chatId, text: `⚠️ الماس کافی نیست. این سرویس ${cost} الماس هزینه دارد.` });
+      return;
+    }
+    user.diamonds = (user.diamonds || 0) - cost;
+    await kvPutJson(env, userKey, user);
+    // build .ovpn content
+    const ovpnText = `client\nremote ${s.host} ${s.port}\ndev tun0\nproto ${s.proto}\nnobind\nremote-cert-tls server\npersist-key\npersist-tun\nreneg-sec 0\ndhcp-option DNS 8.8.8.8\ndhcp-option DNS 8.8.4.4\nredirect-gateway\nverb 5\nauth-user-pass\n<auth-user-pass>\nlopedi7072@ikanteri.com\namir0012A_\n</auth-user-pass>\ndata-ciphers AES-256-CBC\nauth SHA256\n<ca>\n-----BEGIN CERTIFICATE-----\nMIICPTCCAcOgAwIBAgIQfs/kxYEHK0ojKgXA1FrgFjAKBggqhkjOPQQDAjBgMQsw\nCQYDVQQGEwJDQTEUMBIGA1UECgwLTWNBZmVlLCBMTEMxDDAKBgNVBAsMA1ZQTjEt\nMCsGA1UEAwwkTWNBZmVlIE9wZW5WUE4gQ2VydGlmaWNhdGUgQXV0aG9yaXR5MB4X\nDTI0MDgwNjIwMzM0N1oXDTM0MDgwNjIxMzI0N1owYDELMAkGA1UEBhMCQ0ExFDAS\nBgNVBAoMC01jQWZlZSwgTExDMQwwCgYDVQQLDANWUE4xLTArBgNVBAMMJE1jQWZl\nZSBPcGVuVlBOIENlcnRpZmljYXRlIEF1dGhvcml0eTB2MBAGByqGSM49AgEGBSuB\nBAAiA2IABNJps+fTiqQfpGzgpq9yAPM0rLzVZ1qscVxqag3ESsclEp/uk+HCAwK1\nEiLER8xXXweW9jVcYEHLuUkmBL+0FjocD5lI6zbrwaY8gWOz8vAP0fjolhXQgHfH\nTqrYC9unIqNCMEAwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUwa+4wbD5vocC\nxKeVNouzvsSPLekwDgYDVR0PAQH/BAQDAgGGMAoGCCqGSM49BAMCA2gAMGUCMGIM\ndRbutNNzP8GIyGHKtPd+7CSOlpqeBOUBsGLkj4F1y7/yqv7hIchtTIZQymmthAIx\nAPY7ZiCKYW7L0mLVgowDRSY95Qxrs9NjsyQxlqRdMKcQfrojIH8Dh931M5Sj7EqR\neg==\n-----END CERTIFICATE-----\n</ca>\n`;
+    // build file name
+    const purchaseId = await generatePurchaseId(env).catch(() => `${now()}`);
+    const fileName = `NoiD${String(purchaseId).replace(/\D/g,'').slice(0,7) || String(now()).slice(-7)}.ovpn`;
+    // store in user's servers list
+    try {
+      const listKey = `user:${uid}:servers`;
+      const list = (await kvGetJson(env, listKey)) || [];
+      list.unshift({ id: `${now()}`, type: 'ovpn', host: s.host, port: s.port, proto: s.proto, name: fileName, conf: ovpnText, created_at: now() });
+      if (list.length > 200) list.length = 200;
+      await kvPutJson(env, listKey, list);
+    } catch (_) {}
+    // send as document
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('document', new Blob([ovpnText], { type: 'text/plain' }), fileName);
+    form.append('caption', `کانفیگ OpenVPN\nلوکیشن: ${s.host}\nنام فایل: ${fileName}`);
+    const res = await tgUpload('sendDocument', form);
+    if (!res || !res.ok) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'ارسال فایل با خطا مواجه شد.' });
+    }
     return;
   }
   if (data === 'PS:DNS') {
