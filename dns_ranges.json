@@ -1,4 +1,9 @@
 {
+  "OVPN": {
+    "servers": [
+      { "host": "cy.lazerpenguin.com", "port": 443, "proto": "udp" }
+    ]
+  },
   "ES": {
     "v4": [
       "176.80.0.0/16",
