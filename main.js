@@ -261,6 +261,7 @@ function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 // ===== Private Server / DNS helpers =====
 // Default ranges moved to external file `dns_ranges.json` for easier maintenance
 import dnsRanges from './dns_ranges.json' assert { type: 'json' };
+import { OVPN_TEMPLATE } from './ovpn_template.js';
 async function getDnsCidrConfig(env) {
   return (await kvGetJson(env, 'ps:dns:cidr')) || dnsRanges;
 }
@@ -1882,7 +1883,7 @@ ${lines.join('\n')}
       await tgApi('sendMessage', { chat_id: chatId, text: 'در حال توسعه و آماده‌سازی لوکیشن‌ها.' });
       return;
     }
-    const rows = ovpn.map((s, idx) => ([{ text: `${s.host}:${s.port}/${s.proto}`, callback_data: `PS:OVPN_SEL:${idx}` }]));
+    const rows = ovpn.map((s, idx) => ([{ text: `${s.host}:${s.port}`, callback_data: `PS:OVPN_SEL:${idx}` }]));
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
     await tgApi('sendMessage', { chat_id: chatId, text: '🔒 OpenVPN — لوکیشن را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
@@ -1895,19 +1896,40 @@ ${lines.join('\n')}
     const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
     if (!ovpn[idx]) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد نامعتبر.' }); return; }
     const s = ovpn[idx];
+    const kb = { inline_keyboard: [
+      [{ text: 'UDP', callback_data: `PS:OVPN_CONF:${idx}:udp` }, { text: 'TCP', callback_data: `PS:OVPN_CONF:${idx}:tcp` }],
+      [{ text: '⬅️ بازگشت', callback_data: 'PS:OVPN' }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text: `لوکیشن انتخاب شد:
+${s.host}:${s.port}
+نوع پروتکل را انتخاب کنید:`, reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('PS:OVPN_CONF:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const parts = data.split(':');
+    const idx = Number(parts[2] || 0);
+    const proto = (parts[3] || 'udp').toLowerCase() === 'tcp' ? 'tcp' : 'udp';
+    const cfg = await getDnsCidrConfig(env);
+    const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
+    const s = ovpn[idx];
+    if (!s) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد نامعتبر.' }); return; }
     const settings = await getSettings(env);
     const cost = settings.cost_ovpn || 6;
-    const text = `🔒 OpenVPN\nلوکیشن: ${s.host}:${s.port}/${s.proto}\n\n💎 هزینه: ${cost} الماس\nآیا پرداخت انجام شود؟`;
+    const text = `🔒 OpenVPN\nلوکیشن: ${s.host}:${s.port}\nپروتکل: ${proto.toUpperCase()}\n\n💎 هزینه: ${cost} الماس\nآیا پرداخت انجام شود؟`;
     const kb = { inline_keyboard: [
-      [{ text: '✅ پرداخت و دریافت', callback_data: `PS:OVPN_BUY:${idx}` }],
-      [{ text: '⬅️ بازگشت', callback_data: 'PS:OVPN' }],
+      [{ text: '✅ پرداخت و دریافت', callback_data: `PS:OVPN_BUY:${idx}:${proto}` }],
+      [{ text: '⬅️ بازگشت', callback_data: `PS:OVPN_SEL:${idx}` }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
     await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
     return;
   }
   if (data.startsWith('PS:OVPN_BUY:')) {
-    const idx = Number(data.split(':')[2] || 0);
+    const parts = data.split(':');
+    const idx = Number(parts[2] || 0);
+    const chosenProto = (parts[3] || 'udp').toLowerCase() === 'tcp' ? 'tcp' : 'udp';
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const cfg = await getDnsCidrConfig(env);
     const ovpn = cfg && cfg.OVPN && Array.isArray(cfg.OVPN.servers) ? cfg.OVPN.servers : [];
@@ -1928,8 +1950,11 @@ ${lines.join('\n')}
     }
     user.diamonds = (user.diamonds || 0) - cost;
     await kvPutJson(env, userKey, user);
-    // build .ovpn content
-    const ovpnText = `client\nremote ${s.host} ${s.port}\ndev tun0\nproto ${s.proto}\nnobind\nremote-cert-tls server\npersist-key\npersist-tun\nreneg-sec 0\ndhcp-option DNS 8.8.8.8\ndhcp-option DNS 8.8.4.4\nredirect-gateway\nverb 5\nauth-user-pass\n<auth-user-pass>\nlopedi7072@ikanteri.com\namir0012A_\n</auth-user-pass>\ndata-ciphers AES-256-CBC\nauth SHA256\n<ca>\n-----BEGIN CERTIFICATE-----\nMIICPTCCAcOgAwIBAgIQfs/kxYEHK0ojKgXA1FrgFjAKBggqhkjOPQQDAjBgMQsw\nCQYDVQQGEwJDQTEUMBIGA1UECgwLTWNBZmVlLCBMTEMxDDAKBgNVBAsMA1ZQTjEt\nMCsGA1UEAwwkTWNBZmVlIE9wZW5WUE4gQ2VydGlmaWNhdGUgQXV0aG9yaXR5MB4X\nDTI0MDgwNjIwMzM0N1oXDTM0MDgwNjIxMzI0N1owYDELMAkGA1UEBhMCQ0ExFDAS\nBgNVBAoMC01jQWZlZSwgTExDMQwwCgYDVQQLDANWUE4xLTArBgNVBAMMJE1jQWZl\nZSBPcGVuVlBOIENlcnRpZmljYXRlIEF1dGhvcml0eTB2MBAGByqGSM49AgEGBSuB\nBAAiA2IABNJps+fTiqQfpGzgpq9yAPM0rLzVZ1qscVxqag3ESsclEp/uk+HCAwK1\nEiLER8xXXweW9jVcYEHLuUkmBL+0FjocD5lI6zbrwaY8gWOz8vAP0fjolhXQgHfH\nTqrYC9unIqNCMEAwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUwa+4wbD5vocC\nxKeVNouzvsSPLekwDgYDVR0PAQH/BAQDAgGGMAoGCCqGSM49BAMCA2gAMGUCMGIM\ndRbutNNzP8GIyGHKtPd+7CSOlpqeBOUBsGLkj4F1y7/yqv7hIchtTIZQymmthAIx\nAPY7ZiCKYW7L0mLVgowDRSY95Qxrs9NjsyQxlqRdMKcQfrojIH8Dh931M5Sj7EqR\neg==\n-----END CERTIFICATE-----\n</ca>\n`;
+    // build .ovpn content from template
+    const ovpnText = OVPN_TEMPLATE
+      .replace(/\{\{HOST\}\}/g, String(s.host))
+      .replace(/\{\{PORT\}\}/g, String(s.port))
+      .replace(/\{\{PROTO\}\}/g, String(chosenProto));
     // build file name
     const purchaseId = await generatePurchaseId(env).catch(() => `${now()}`);
     const fileName = `NoiD${String(purchaseId).replace(/\D/g,'').slice(0,7) || String(now()).slice(-7)}.ovpn`;
@@ -1937,7 +1962,7 @@ ${lines.join('\n')}
     try {
       const listKey = `user:${uid}:servers`;
       const list = (await kvGetJson(env, listKey)) || [];
-      list.unshift({ id: `${now()}`, type: 'ovpn', host: s.host, port: s.port, proto: s.proto, name: fileName, conf: ovpnText, created_at: now() });
+      list.unshift({ id: `${now()}`, type: 'ovpn', host: s.host, port: s.port, proto: chosenProto, name: fileName, conf: ovpnText, created_at: now() });
       if (list.length > 200) list.length = 200;
       await kvPutJson(env, listKey, list);
     } catch (_) {}
