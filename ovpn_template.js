@@ -14,7 +14,7 @@ verb 5
 auth-user-pass
 <auth-user-pass>
 newaye2112@jobzyy.com
-noiduseres78
+noidusers78
 </auth-user-pass>
 data-ciphers AES-256-CBC
 auth SHA256
