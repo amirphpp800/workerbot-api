@@ -13,8 +13,8 @@ redirect-gateway
 verb 5
 auth-user-pass
 <auth-user-pass>
-lopedi7072@ikanteri.com
-amir0012A_
+newaye2112@jobzyy.com
+noiduseres78
 </auth-user-pass>
 data-ciphers AES-256-CBC
 auth SHA256
