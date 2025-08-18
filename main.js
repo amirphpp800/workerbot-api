@@ -1883,7 +1883,29 @@ ${lines.join('\n')}
       await tgApi('sendMessage', { chat_id: chatId, text: 'در حال توسعه و آماده‌سازی لوکیشن‌ها.' });
       return;
     }
-    const rows = ovpn.map((s, idx) => ([{ text: `${s.host}:${s.port}`, callback_data: `PS:OVPN_SEL:${idx}` }]));
+    const rows = [];
+    const isIp = (h) => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(String(h||''));
+    let domainFirstIdx = -1;
+    for (let i = 0; i < ovpn.length; i++) {
+      if (!isIp(ovpn[i].host)) { domainFirstIdx = i; break; }
+    }
+    if (domainFirstIdx >= 0) {
+      const s = ovpn[domainFirstIdx];
+      rows.push([{ text: `${s.host}:${s.port}`, callback_data: `PS:OVPN_SEL:${domainFirstIdx}` }]);
+    }
+    const ipIdxs = [];
+    for (let i = 0; i < ovpn.length; i++) { if (i !== domainFirstIdx && isIp(ovpn[i].host)) ipIdxs.push(i); }
+    for (let i = 0; i < ipIdxs.length; i += 2) {
+      const idx1 = ipIdxs[i];
+      const s1 = ovpn[idx1];
+      const row = [{ text: `${s1.host}:${s1.port}`, callback_data: `PS:OVPN_SEL:${idx1}` }];
+      const idx2 = ipIdxs[i+1];
+      if (idx2 !== undefined) {
+        const s2 = ovpn[idx2];
+        row.push({ text: `${s2.host}:${s2.port}`, callback_data: `PS:OVPN_SEL:${idx2}` });
+      }
+      rows.push(row);
+    }
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
     await tgApi('sendMessage', { chat_id: chatId, text: '🔒 OpenVPN — لوکیشن را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
