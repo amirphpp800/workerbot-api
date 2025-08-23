@@ -567,6 +567,7 @@ function buildAdminPanelKeyboard() {
   ]);
   rows.push([
     { text: '🎯 افزودن الماس', callback_data: 'ADMIN:GIVEPOINTS' },
+    { text: '➖ کسر الماس', callback_data: 'ADMIN:TAKEPOINTS' },
     { text: '📆 ماموریت‌ها', callback_data: 'ADMIN:MISSIONS' }
   ]);
   rows.push([
@@ -1221,6 +1222,13 @@ async function onMessage(msg, env) {
     await tgApi('sendMessage', { chat_id: chatId, text: 'مبلغ الماس را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
       return;
     }
+    if (session.awaiting === 'takepoints_uid' && text && isAdmin(uid)) {
+      const tid = Number(text.trim());
+      if (!Number.isFinite(tid)) { await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی نامعتبر است.' }); return; }
+      await setSession(env, uid, { awaiting: `takepoints_amount:${tid}` });
+      await tgApi('sendMessage', { chat_id: chatId, text: 'مبلغ الماس برای کسر را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+      return;
+    }
     if (session.awaiting?.startsWith('givepoints_amount:') && text && isAdmin(uid)) {
       const tid = Number(session.awaiting.split(':')[1]);
       const amount = Number(text.trim());
@@ -1232,6 +1240,20 @@ async function onMessage(msg, env) {
       await setSession(env, uid, {});
       await tgApi('sendMessage', { chat_id: chatId, text: `✅ ${amount} الماس به کاربر ${tid} اضافه شد. موجودی جدید: ${target.diamonds}` });
       try { await tgApi('sendMessage', { chat_id: tid, text: `🎯 ${amount} الماس به حساب شما اضافه شد.` }); } catch (_) {}
+      return;
+    }
+    if (session.awaiting?.startsWith('takepoints_amount:') && text && isAdmin(uid)) {
+      const tid = Number(session.awaiting.split(':')[1]);
+      const amount = Number(text.trim());
+      if (!Number.isFinite(amount) || amount <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'مقدار نامعتبر است.' }); return; }
+      const tKey = `user:${tid}`;
+      const target = (await kvGetJson(env, tKey)) || { id: tid, diamonds: 0 };
+      const newDiamonds = Math.max(0, (target.diamonds || 0) - amount);
+      target.diamonds = newDiamonds;
+      await kvPutJson(env, tKey, target);
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: `✅ ${amount} الماس از کاربر ${tid} کسر شد. موجودی جدید: ${target.diamonds}` });
+      try { await tgApi('sendMessage', { chat_id: tid, text: `➖ ${amount} الماس از حساب شما کسر شد.` }); } catch (_) {}
       return;
     }
     // Settings flows
@@ -1701,6 +1723,29 @@ async function onMessage(msg, env) {
     await kvPutJson(env, tKey, target);
   await tgApi('sendMessage', { chat_id: chatId, text: `✅ ${amount} الماس به کاربر ${tid} اضافه شد. موجودی جدید: ${target.diamonds}` });
   try { await tgApi('sendMessage', { chat_id: tid, text: `🎯 ${amount} الماس به حساب شما اضافه شد.` }); } catch (_) {}
+    return;
+  }
+
+  // Admin command: take diamonds
+  if (isAdmin(uid) && text.startsWith('/takediamonds')) {
+    const parts = text.split(/\s+/);
+    if (parts.length < 3) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'استفاده: /takediamonds <uid> <amount>' });
+      return;
+    }
+    const tid = Number(parts[1]);
+    const amount = Number(parts[2]);
+    if (!Number.isFinite(tid) || !Number.isFinite(amount) || amount <= 0) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'پارامتر نامعتبر است.' });
+      return;
+    }
+    const tKey = `user:${tid}`;
+    const target = (await kvGetJson(env, tKey)) || { id: tid, diamonds: 0 };
+    const newDiamonds = Math.max(0, (target.diamonds || 0) - amount);
+    target.diamonds = newDiamonds;
+    await kvPutJson(env, tKey, target);
+    await tgApi('sendMessage', { chat_id: chatId, text: `✅ ${amount} الماس از کاربر ${tid} کسر شد. موجودی جدید: ${target.diamonds}` });
+    try { await tgApi('sendMessage', { chat_id: tid, text: `➖ ${amount} الماس از حساب شما کسر شد.` }); } catch (_) {}
     return;
   }
 
@@ -3273,6 +3318,13 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
     await setSession(env, uid, { awaiting: 'givepoints_uid' });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی عددی کاربر را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+
+  if (data === 'ADMIN:TAKEPOINTS' && isAdmin(uid)) {
+    await setSession(env, uid, { awaiting: 'takepoints_uid' });
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی عددی کاربر برای کسر الماس را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
     return;
   }
 
