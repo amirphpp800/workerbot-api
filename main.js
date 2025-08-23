@@ -503,13 +503,18 @@ async function buildDynamicMainMenu(env, uid) {
   // Build rows explicitly per requested order
   const rows = [];
 
-  // Row 1: Referral (renamed) side-by-side with User Account
+  // Row 1: Buy Panel (moved to top per request)
+  rows.push([
+    { text: '🛒 خرید پنل', callback_data: 'PANEL_BUY' }
+  ]);
+
+  // Row 2: Referral (renamed) side-by-side with User Account
   rows.push([
     { text: '👥 زیرمجموعه گیری', callback_data: 'SUB:REFERRAL' },
     { text: '👤 حساب کاربری', callback_data: 'SUB:ACCOUNT' }
   ]);
 
-  // Row 2: Gift Code | Get by Token
+  // Row 3: Gift Code | Get by Token
   rows.push([
     { text: labelFor(settings.button_labels, 'gift', '🎁 کد هدیه'), callback_data: 'REDEEM_GIFT' },
     { text: labelFor(settings.button_labels, 'get_by_token', '🔑 دریافت با توکن'), callback_data: 'GET_BY_TOKEN' }
@@ -519,12 +524,7 @@ async function buildDynamicMainMenu(env, uid) {
     { text: '🛡️ سرور اختصاصی', callback_data: 'PRIVATE_SERVER' }
   ]);
 
-  // Row 3: Buy Panel (single)
-  rows.push([
-    { text: '🛒 خرید پنل', callback_data: 'PANEL_BUY' }
-  ]);
-
-  // Row 3: (Support removed per request)
+  // (Support removed per request)
 
   // Row 4: Lottery side-by-side with Missions
   rows.push([
@@ -1089,11 +1089,20 @@ async function onMessage(msg, env) {
       await kvPutJson(env, pKey, purchase);
       await setSession(env, uid, {});
 
-      const caption = `درخواست خرید الماس\nشناسه: ${purchase.id}\nکاربر: ${uid}${from.username ? ` (@${from.username})` : ''}\nالماس: ${purchase.diamonds}\nمبلغ: ${purchase.price_toman.toLocaleString('fa-IR')} تومان`;
-      const kb = { inline_keyboard: [[
-        { text: '✅ تایید و افزودن الماس', callback_data: `PAYAPP:${purchase.id}` },
-        { text: '❌ رد', callback_data: `PAYREJ:${purchase.id}` }
-      ]] };
+      // Build admin review message and actions depending on purchase type
+      const isPanelPurchase = purchase.type === 'panel';
+      const caption = isPanelPurchase
+        ? `درخواست خرید پنل\nشناسه: ${purchase.id}\nکاربر: ${uid}${from.username ? ` (@${from.username})` : ''}\nپنل: ${purchase.panel_title || '-'}\nمبلغ: ${purchase.price_toman.toLocaleString('fa-IR')} تومان`
+        : `درخواست خرید الماس\nشناسه: ${purchase.id}\nکاربر: ${uid}${from.username ? ` (@${from.username})` : ''}\nالماس: ${purchase.diamonds}\nمبلغ: ${purchase.price_toman.toLocaleString('fa-IR')} تومان`;
+      const kb = isPanelPurchase
+        ? { inline_keyboard: [[
+            { text: '✉️ رفتن به پیوی کاربر', url: `tg://user?id=${uid}` },
+            { text: '❌ رد', callback_data: `PAYREJ:${purchase.id}` }
+          ]] }
+        : { inline_keyboard: [[
+            { text: '✅ تایید و افزودن الماس', callback_data: `PAYAPP:${purchase.id}` },
+            { text: '❌ رد', callback_data: `PAYREJ:${purchase.id}` }
+          ]] };
       try {
         const admins = await getAdminIds(env);
         let recipients = [];
@@ -1879,7 +1888,7 @@ ${lines.join('\n')}
     const actions = [];
     if (p.status === 'pending_review') {
       if (isPanel) {
-        actions.push([{ text: '✉️ رفتن به پیوی کاربر', callback_data: `OPENPM:${p.user_id}` }, { text: '❌ رد', callback_data: `PAYREJ:${p.id}` }]);
+        actions.push([{ text: '✉️ رفتن به پیوی کاربر', url: `tg://user?id=${p.user_id}` }, { text: '❌ رد', callback_data: `PAYREJ:${p.id}` }]);
       } else {
         actions.push([{ text: '✅ تایید و افزودن الماس', callback_data: `PAYAPP:${p.id}` }, { text: '❌ رد', callback_data: `PAYREJ:${p.id}` }]);
       }
