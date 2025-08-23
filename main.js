@@ -571,6 +571,10 @@ function buildAdminPanelKeyboard() {
     { text: '📆 ماموریت‌ها', callback_data: 'ADMIN:MISSIONS' }
   ]);
   rows.push([
+    { text: '❄️ فریز موجودی', callback_data: 'ADMIN:FREEZE' },
+    { text: '🧊 آن‌فریز موجودی', callback_data: 'ADMIN:UNFREEZE' }
+  ]);
+  rows.push([
     { text: '🗄 تهیه پشتیبان', callback_data: 'ADMIN:BACKUP' },
     { text: '🎟 قرعه‌کشی', callback_data: 'ADMIN:LOTTERY' }
   ]);
@@ -1240,6 +1244,30 @@ async function onMessage(msg, env) {
       await setSession(env, uid, {});
       await tgApi('sendMessage', { chat_id: chatId, text: `✅ ${amount} الماس به کاربر ${tid} اضافه شد. موجودی جدید: ${target.diamonds}` });
       try { await tgApi('sendMessage', { chat_id: tid, text: `🎯 ${amount} الماس به حساب شما اضافه شد.` }); } catch (_) {}
+      return;
+    }
+    if (session.awaiting === 'freeze_uid' && text && isAdmin(uid)) {
+      const tid = Number(text.trim());
+      if (!Number.isFinite(tid)) { await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی نامعتبر است.' }); return; }
+      const tKey = `user:${tid}`;
+      const target = (await kvGetJson(env, tKey)) || { id: tid, diamonds: 0 };
+      target.frozen = true;
+      await kvPutJson(env, tKey, target);
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: `✅ موجودی کاربر ${tid} فریز شد.` });
+      try { await tgApi('sendMessage', { chat_id: tid, text: `❄️ موجودی الماس شما توسط مدیر فریز شد. تا اطلاع بعدی قابل استفاده نیست.` }); } catch (_) {}
+      return;
+    }
+    if (session.awaiting === 'unfreeze_uid' && text && isAdmin(uid)) {
+      const tid = Number(text.trim());
+      if (!Number.isFinite(tid)) { await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی نامعتبر است.' }); return; }
+      const tKey = `user:${tid}`;
+      const target = (await kvGetJson(env, tKey)) || { id: tid, diamonds: 0 };
+      target.frozen = false;
+      await kvPutJson(env, tKey, target);
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: `✅ موجودی کاربر ${tid} آن‌فریز شد.` });
+      try { await tgApi('sendMessage', { chat_id: tid, text: `🧊 موجودی الماس شما توسط مدیر آن‌فریز شد.` }); } catch (_) {}
       return;
     }
     if (session.awaiting?.startsWith('takepoints_amount:') && text && isAdmin(uid)) {
@@ -2296,6 +2324,7 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
     }
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
+    if (user.frozen && !isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ موجودی شما فریز است.' }); return; }
     const settings = await getSettings(env);
     const cost = settings.cost_ovpn || 6;
     if ((user.diamonds || 0) < cost) {
@@ -2397,6 +2426,7 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
     // ask to confirm payment of 1 diamond
     const userKey = `user:${uid}`;
     const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
+    if (user.frozen && !isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ موجودی شما فریز است.' }); return; }
     const settings = await getSettings(env);
     const cost = settings.cost_dns || 1;
     const text = `🧩 دی ان اس اختصاصی (${dnsCountryLabel(code)})\n\n💎 هزینه: ${cost} الماس\n💳 آیا پرداخت انجام شود؟\n\n👤 موجودی شما: ${user.diamonds || 0}`;
@@ -3144,6 +3174,7 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
       }
     }
     const user = (await kvGetJson(env, `user:${uid}`)) || { diamonds: 0 };
+    if (user.frozen && !isAdmin(uid)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'موجودی شما فریز است' }); return; }
     if ((user.diamonds || 0) < needed) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'الماس کافی نیست' }); return; }
     user.diamonds = (user.diamonds || 0) - needed; await kvPutJson(env, `user:${uid}`, user);
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'پرداخت شد' });
@@ -3325,6 +3356,18 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
     await setSession(env, uid, { awaiting: 'takepoints_uid' });
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی عددی کاربر برای کسر الماس را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  if (data === 'ADMIN:FREEZE' && isAdmin(uid)) {
+    await setSession(env, uid, { awaiting: 'freeze_uid' });
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی عددی کاربر برای فریز موجودی را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  if (data === 'ADMIN:UNFREEZE' && isAdmin(uid)) {
+    await setSession(env, uid, { awaiting: 'unfreeze_uid' });
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'آی‌دی عددی کاربر برای آن‌فریز موجودی را وارد کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
     return;
   }
 
