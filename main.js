@@ -35,6 +35,8 @@ Sections (edit guide):
 12) Public endpoints (backup, file download)
 */
 
+import { handleWireguardCallback, handleWireguardMyConfig } from './wg.js';
+
 /* ==================== 1) Config & Runtime (EDIT HERE) ==================== */
 // IMPORTANT: Set secrets in environment variables for production. The values
 // below are fallbacks to help local testing. Prefer configuring via `env`.
@@ -382,14 +384,7 @@ function base64UrlToBase64(u) {
   const s = u.replace(/-/g, '+').replace(/_/g, '/');
   return s + '='.repeat((4 - (s.length % 4)) % 4);
 }
-async function generateWgKeypairBase64() {
-  const kp = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
-  const jwkPriv = await crypto.subtle.exportKey('jwk', kp.privateKey);
-  const jwkPub = await crypto.subtle.exportKey('jwk', kp.publicKey);
-  const privB64 = base64UrlToBase64(jwkPriv.d || '');
-  const pubB64 = base64UrlToBase64(jwkPub.x || '');
-  return { privateKey: privB64, publicKey: pubB64 };
-}
+// moved to wg.js
 
 /* ==================== 5) Settings & Date helpers ==================== */
 let SETTINGS_MEMO = null;
@@ -1847,22 +1842,117 @@ async function onCallback(cb, env) {
   if (data === 'ADMIN:PAYMENTS' && isAdmin(uid)) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const idx = (await kvGetJson(env, 'index:purchases')) || [];
-    const first20 = idx.slice(0, 20);
-    const entries = [];
-    for (const pid of first20) {
+    // Compute status counts (scan up to first 500 items for speed)
+    let pendingCount = 0, approvedCount = 0, rejectedCount = 0, totalCount = 0;
+    for (const pid of idx.slice(0, 500)) {
       const p = await kvGetJson(env, `purchase:${pid}`);
       if (!p) continue;
-      entries.push(p);
+      totalCount++;
+      if (p.status === 'pending_review') pendingCount++;
+      else if (p.status === 'approved') approvedCount++;
+      else if (p.status === 'rejected') rejectedCount++;
     }
-    const lines = entries.map(p => `#${String(p.id).padStart(8,'0')} | ${p.user_id} | ${p.diamonds}💎 | ${(p.price_toman||0).toLocaleString('fa-IR')}ت | ${p.status}`);
-    const text = lines.length ? `آخرین تراکنش‌ها (۲۰ مورد):
-${lines.join('\n')}
+    const summary = `💳 مدیریت پرداخت‌ها
+وضعیت‌ها:
+• در انتظار بررسی: ${pendingCount.toLocaleString('fa-IR')}
+• تایید شده: ${approvedCount.toLocaleString('fa-IR')}
+• رد شده: ${rejectedCount.toLocaleString('fa-IR')}
+• کل: ${totalCount.toLocaleString('fa-IR')}
 
-برای مشاهده رسید یا تصمیم، از دکمه‌های زیر استفاده کنید.` : 'هیچ تراکنشی یافت نشد.';
+برای مشاهده لیست، یکی از فیلترها را انتخاب کنید.`;
+    const tabs = { inline_keyboard: [
+      [
+        { text: `در انتظار (${pendingCount})`, callback_data: 'ADMIN:PAYMENTS:pending:0' },
+        { text: `تایید شده (${approvedCount})`, callback_data: 'ADMIN:PAYMENTS:approved:0' },
+        { text: `رد شده (${rejectedCount})`, callback_data: 'ADMIN:PAYMENTS:rejected:0' },
+        { text: `همه (${totalCount})`, callback_data: 'ADMIN:PAYMENTS:all:0' }
+      ],
+      [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text: summary, reply_markup: tabs });
+
+    // Also show first page of pending by default
+    const pageSize = 10;
+    const list = [];
+    let hasMore = false;
+    for (const pid of idx) {
+      const p = await kvGetJson(env, `purchase:${pid}`);
+      if (!p) continue;
+      if (p.status === 'pending_review') {
+        if (list.length < pageSize) list.push(p); else { hasMore = true; break; }
+      }
+    }
+    if (!list.length) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'هیچ پرداخت در انتظاری وجود ندارد.', reply_markup: { inline_keyboard: [[{ text: '⬅️ انتخاب فیلتر دیگر', callback_data: 'ADMIN:PAYMENTS' }], [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]] } });
+      return;
+    }
+    const lines = list.map(p => {
+      const typeLabel = p.type === 'panel' ? `🛍 پنل: ${p.panel_title||'-'}` : `💎 الماس: ${p.diamonds}`;
+      const amount = (p.price_toman||0).toLocaleString('fa-IR');
+      return `#${String(p.id).padStart(8,'0')} | ${typeLabel} | کاربر: ${p.user_id} | مبلغ: ${amount}ت | وضعیت: در انتظار`;
+    });
+    const text = `فهرست در انتظار (صفحه 1):\n${lines.join('\n')}`;
     const kb = { inline_keyboard: [
-      ...entries.map(p => ([
-        { text: `🧾 ${String(p.id).padStart(8,'0')} (${p.status==='pending_review'?'در انتظار':'بررسی‌شده'})`, callback_data: `ADMIN:PAY:VIEW:${p.id}` },
-      ])),
+      ...list.map(p => ([{ text: `🧾 ${String(p.id).padStart(8,'0')} — مشاهده`, callback_data: `ADMIN:PAY:VIEW:${p.id}` }])),
+      [
+        ...(hasMore ? [{ text: '▶️ بعدی', callback_data: 'ADMIN:PAYMENTS:pending:1' }] : [])
+      ],
+      [{ text: '🔎 تغییر فیلتر', callback_data: 'ADMIN:PAYMENTS' }],
+      [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('ADMIN:PAYMENTS:') && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const parts = data.split(':');
+    const status = parts[2] || 'pending';
+    const page = Math.max(0, parseInt(parts[3] || '0', 10) || 0);
+    const pageSize = 10;
+    const idx = (await kvGetJson(env, 'index:purchases')) || [];
+    const list = [];
+    let matchedCount = 0;
+    let hasMore = false;
+    const matches = (p) => {
+      if (status === 'all') return true;
+      if (status === 'pending') return p.status === 'pending_review';
+      if (status === 'approved') return p.status === 'approved';
+      if (status === 'rejected') return p.status === 'rejected';
+      return false;
+    };
+    for (const pid of idx) {
+      const p = await kvGetJson(env, `purchase:${pid}`);
+      if (!p || !matches(p)) continue;
+      if (matchedCount >= page * pageSize && list.length < pageSize) list.push(p);
+      matchedCount++;
+      if (list.length === pageSize && matchedCount > (page + 1) * pageSize) { hasMore = true; break; }
+    }
+    const headerLabel = status === 'pending' ? 'در انتظار' : status === 'approved' ? 'تایید شده' : status === 'rejected' ? 'رد شده' : 'همه';
+    if (!list.length) {
+      await tgApi('sendMessage', { chat_id: chatId, text: `موردی برای «${headerLabel}» در این صفحه یافت نشد.`, reply_markup: { inline_keyboard: [
+        [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PAYMENTS' }],
+      ] } });
+      return;
+    }
+    const lines = list.map(p => {
+      const typeLabel = p.type === 'panel' ? `🛍 پنل: ${p.panel_title||'-'}` : `💎 الماس: ${p.diamonds}`;
+      const amount = (p.price_toman||0).toLocaleString('fa-IR');
+      const st = p.status === 'pending_review' ? 'در انتظار' : p.status === 'approved' ? 'تایید شده' : p.status === 'rejected' ? 'رد شده' : p.status;
+      return `#${String(p.id).padStart(8,'0')} | ${typeLabel} | کاربر: ${p.user_id} | مبلغ: ${amount}ت | وضعیت: ${st}`;
+    });
+    const text = `فهرست ${headerLabel} (صفحه ${page + 1}):\n${lines.join('\n')}`;
+    const nav = [];
+    if (page > 0) nav.push({ text: '◀️ قبلی', callback_data: `ADMIN:PAYMENTS:${status}:${page - 1}` });
+    if (hasMore) nav.push({ text: '▶️ بعدی', callback_data: `ADMIN:PAYMENTS:${status}:${page + 1}` });
+    const kb = { inline_keyboard: [
+      ...list.map(p => ([{ text: `🧾 ${String(p.id).padStart(8,'0')} — مشاهده`, callback_data: `ADMIN:PAY:VIEW:${p.id}` }])),
+      nav,
+      [
+        { text: 'در انتظار', callback_data: 'ADMIN:PAYMENTS:pending:0' },
+        { text: 'تایید شده', callback_data: 'ADMIN:PAYMENTS:approved:0' },
+        { text: 'رد شده', callback_data: 'ADMIN:PAYMENTS:rejected:0' },
+        { text: 'همه', callback_data: 'ADMIN:PAYMENTS:all:0' }
+      ],
       [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]
     ] };
     await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
@@ -2386,37 +2476,7 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
     return;
   }
   if (data.startsWith('MYCFG:WG:')) {
-    const id = data.split(':')[2];
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    const listKey = `user:${uid}:servers`;
-    const list = (await kvGetJson(env, listKey)) || [];
-    const item = list.find(s => String(s.id) === String(id) && (s.type||'dns') === 'wg');
-    if (!item) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد یافت نشد.' }); return; }
-    // Send the stored .conf if present; otherwise build from stored fields
-    if (item.conf) {
-      const form = new FormData();
-      form.append('chat_id', String(chatId));
-      form.append('document', new Blob([item.conf], { type: 'text/plain' }), `${(item.name||'WG')}.conf`);
-      form.append('caption', `${countryFlag(item.country)} وایرگارد (${dnsCountryLabel(item.country)})${item.name?`\nنام: ${item.name}`:''}`);
-      const res = await tgUpload('sendDocument', form);
-      if (!res || !res.ok) { await tgApi('sendMessage', { chat_id: chatId, text: 'ارسال فایل با خطا مواجه شد.' }); }
-      return;
-    }
-    if (item.endpoint && item.name) {
-      const kp = { privateKey: 'HIDDEN', publicKey: 'HIDDEN' };
-      const mtu = 1440;
-      const address = '10.66.66.2/32';
-      const allowed = '0.0.0.0/11';
-      const conf = `[Interface]\nPrivateKey = (در زمان ساخت ذخیره نشده)\nAddress = ${address}\nDNS = 10.202.10.10\nMTU = ${mtu}\n\n[Peer]\nPublicKey = (در زمان ساخت ذخیره نشده)\nEndpoint = ${item.endpoint}\nAllowedIPs = ${allowed}\nPersistentKeepalive = 25\n`;
-      const form = new FormData();
-      form.append('chat_id', String(chatId));
-      form.append('document', new Blob([conf], { type: 'text/plain' }), `${(item.name||'WG')}.conf`);
-      form.append('caption', `${countryFlag(item.country)} وایرگارد (${dnsCountryLabel(item.country)})${item.name?`\nنام: ${item.name}`:''}`);
-      const res = await tgUpload('sendDocument', form);
-      if (!res || !res.ok) { await tgApi('sendMessage', { chat_id: chatId, text: 'ارسال فایل با خطا مواجه شد.' }); }
-      return;
-    }
-    await tgApi('sendMessage', { chat_id: chatId, text: 'متاسفانه اطلاعات کافی برای ارسال کانفیگ موجود نیست.' });
+    await handleWireguardMyConfig(data, { uid, chatId, env, tgApi, tgUpload, kvGetJson, countryFlag, dnsCountryLabel, cbId: cb.id });
     return;
   }
   if (data.startsWith('MY_SERVERS_VIEW:')) {
@@ -2441,142 +2501,17 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
     ] } });
     return;
   }
-  if (data === 'PS:WG') {
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
-    const page = 0;
-    const perPage = 12;
-    const totalPages = Math.ceil(countries.length / perPage);
-    const rows = [];
-    const slice = countries.slice(page*perPage, page*perPage + perPage);
-    for (let i = 0; i < slice.length; i += 2) {
-      const c1 = slice[i]; const c2 = slice[i+1];
-      const r = [{ text: `${countryFlag(c1)} ${dnsCountryLabel(c1)}`, callback_data: `PS:WG:${c1}` }];
-      if (c2) r.push({ text: `${countryFlag(c2)} ${dnsCountryLabel(c2)}`, callback_data: `PS:WG:${c2}` });
-      rows.push(r);
-    }
-    rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
-    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    if (totalPages > 1) {
-      const label = `${page+1}/${totalPages} صفحه ${page+1} از ${totalPages}`;
-      const nav = [{ text: label, callback_data: 'NOOP' }];
-      if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:WG_PAGE:${page+1}` });
-      rows.push(nav);
-    }
-    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای وایرگارد اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
-    return;
-  }
-  if (data.startsWith('PS:WG_PAGE:')) {
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    const countries = ['ES','DE','FR','PH','JP','TR','SE','NL','DK','BE','CH','CN'];
-    const perPage = 12;
-    const totalPages = Math.ceil(countries.length / perPage);
-    let page = parseInt(data.split(':')[2], 10) || 0;
-    if (page < 0) page = 0;
-    if (page >= totalPages) page = totalPages - 1;
-    const start = page * perPage;
-    const slice = countries.slice(start, start + perPage);
-    const rows = [];
-    for (let i = 0; i < slice.length; i += 2) {
-      const c1 = slice[i]; const c2 = slice[i+1];
-      const r = [{ text: `${countryFlag(c1)} ${dnsCountryLabel(c1)}`, callback_data: `PS:WG:${c1}` }];
-      if (c2) r.push({ text: `${countryFlag(c2)} ${dnsCountryLabel(c2)}`, callback_data: `PS:WG:${c2}` });
-      rows.push(r);
-    }
-    if (totalPages > 1) {
-      const label = `${page+1}/${totalPages} صفحه ${page+1} از ${totalPages}`;
-      const nav = [];
-      if (page > 0) nav.push({ text: '◀️ صفحه قبل', callback_data: `PS:WG_PAGE:${page-1}` });
-      nav.push({ text: label, callback_data: 'NOOP' });
-      if (page < totalPages - 1) nav.push({ text: '▶️ صفحه بعد', callback_data: `PS:WG_PAGE:${page+1}` });
-      rows.push(nav);
-    }
-    rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
-    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    await tgApi('sendMessage', { chat_id: chatId, text: '🌐 کشور مورد نظر برای وایرگارد اختصاصی را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
-    return;
-  }
-  if (data.startsWith('PS:WG:')) {
-    const code = data.split(':')[2];
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    // location disable check
-    if (await isLocationDisabled(env, 'wg', code)) {
-      await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش درحال توسعه و بروزرسانی می‌باشد و موقتا غیر فعال است.' });
-      return;
-    }
-    // confirm 1-diamond charge
-    const userKey = `user:${uid}`;
-    const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    const settings = await getSettings(env);
-    const cost = settings.cost_wg || 2;
-    const text = `🛰️ وایرگارد اختصاصی (${dnsCountryLabel(code)})\n\n💎 هزینه: ${cost} الماس\n💳 آیا پرداخت انجام شود؟\n\n👤 موجودی شما: ${user.diamonds || 0}`;
-    const kb = { inline_keyboard: [
-      [{ text: '✅ پرداخت و دریافت', callback_data: `PS:WGCONF:${code}` }],
-      [{ text: '❌ انصراف', callback_data: 'PS:WG' }]
-    ] };
-    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
-    return;
-  }
-  if (data.startsWith('PS:WGCONF:')) {
-    const code = data.split(':')[2];
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    // location disable check safety on confirm
-    if (await isLocationDisabled(env, 'wg', code)) {
-      await tgApi('sendMessage', { chat_id: chatId, text: 'این بخش درحال توسعه و بروزرسانی می‌باشد و موقتا غیر فعال است.' });
-      return;
-    }
-    const userKey = `user:${uid}`;
-    const user = (await kvGetJson(env, userKey)) || { id: uid, diamonds: 0 };
-    const settings = await getSettings(env);
-    const cost = settings.cost_wg || 2;
-    if ((user.diamonds || 0) < cost) { await tgApi('sendMessage', { chat_id: chatId, text: `⚠️ الماس کافی نیست. این سرویس ${cost} الماس هزینه دارد.` }); return; }
-    user.diamonds = (user.diamonds || 0) - cost; await kvPutJson(env, userKey, user);
-    // generate keys
-    const kp = await generateWgKeypairBase64();
-    // DNS: one from country ranges + fixed 10.202.10.10 + one IPv6
-    const cfg = await getDnsCidrConfig(env);
-    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-    const v4cidr = pick((cfg[code]||{}).v4 || []);
-    const v6cidr = pick((cfg[code]||{}).v6 || []);
-    const dnsV4 = v4cidr ? randomIp4FromCidr(v4cidr) : '1.1.1.1';
-    const dnsFixedV4 = '10.202.10.10';
-    const dnsV6 = v6cidr ? randomIpv6FromCidr(v6cidr) : '2001:4860:4860::8888';
-    // Endpoint from ranges + port 51820
-    const epCidr = v4cidr || pick(((cfg[code]||{}).v4 || []));
-    const endpointHost = epCidr ? randomIp4FromCidr(epCidr) : '8.8.8.8';
-    const endpoint = `${endpointHost}:51820`;
-    const nameId = String(Math.floor(100000 + Math.random() * 900000));
-    const name = `NoiD${nameId}`;
-    const mtu = 1440;
-    const address = '10.66.66.2/32';
-    const allowed = '0.0.0.0/11';
-    const conf = `[Interface]
-PrivateKey = ${kp.privateKey}
-Address = ${address}
-DNS = ${dnsV4}, ${dnsFixedV4}, ${dnsV6}
-MTU = ${mtu}
-
-[Peer]
-PublicKey = ${kp.publicKey}
-Endpoint = ${endpoint}
-AllowedIPs = ${allowed}
-PersistentKeepalive = 25
-`; 
-    // persist server entry
-    try {
-      const listKey = `user:${uid}:servers`;
-      const list = (await kvGetJson(env, listKey)) || [];
-      list.unshift({ id: `${now()}`, type: 'wg', country: code, name, endpoint, created_at: now() });
-      if (list.length > 200) list.length = 200;
-      await kvPutJson(env, listKey, list);
-    } catch (_) {}
-    // send conf as file
-    const form = new FormData();
-    form.append('chat_id', String(chatId));
-    form.append('document', new Blob([conf], { type: 'text/plain' }), `${name}.conf`);
-    form.append('caption', `${countryFlag(code)} وایرگارد اختصاصی (${dnsCountryLabel(code)})\nنام: ${name}`);
-    const res = await tgUpload('sendDocument', form);
-    if (!res || !res.ok) { await tgApi('sendMessage', { chat_id: chatId, text: 'ارسال فایل با خطا مواجه شد.' }); }
+  if (data === 'PS:WG' || data.startsWith('PS:WG_PAGE:') || data.startsWith('PS:WG:') || data.startsWith('PS:WGCONF:')) {
+    await handleWireguardCallback(data, {
+      uid, chatId, env,
+      tgApi, tgUpload,
+      kvGetJson, kvPutJson,
+      now, getSettings, getDnsCidrConfig,
+      countryFlag, dnsCountryLabel,
+      randomIp4FromCidr, randomIpv6FromCidr,
+      isLocationDisabled,
+      cbId: cb.id,
+    });
     return;
   }
   if (data.startsWith('SUPREPLY:') && isAdmin(uid)) {
