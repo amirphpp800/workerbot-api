@@ -1418,6 +1418,15 @@ async function onMessage(msg, env) {
   if (session.awaiting?.startsWith('pitem:add:desc:') && text && isAdmin(uid)) {
     const base = JSON.parse(decodeURIComponent(session.awaiting.split(':')[3]));
     base.desc = text.trim().slice(0, 2048);
+    await setSession(env, uid, { awaiting: `pitem:add:price:${encodeURIComponent(JSON.stringify(base))}` });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'مبلغ این پنل (تومان) را وارد کنید (عدد):', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  if (session.awaiting?.startsWith('pitem:add:price:') && text && isAdmin(uid)) {
+    const base = JSON.parse(decodeURIComponent(session.awaiting.split(':')[3]));
+    const price = Math.floor(Number(String(text).trim().replace(/[,\s]/g, '')));
+    if (!Number.isFinite(price) || price <= 0) { await tgApi('sendMessage', { chat_id: chatId, text: 'عدد نامعتبر. یک مبلغ صحیح و مثبت وارد کنید.' }); return; }
+    base.price_toman = price;
     const res = await createPanelItem(env, base);
     await setSession(env, uid, {});
     await tgApi('sendMessage', { chat_id: chatId, text: res.ok ? '✅ آیتم خرید پنل ثبت شد.' : '❌ خطا در ثبت آیتم.' });
@@ -1855,16 +1864,25 @@ ${lines.join('\n')}
     const id = data.split(':')[3];
     const p = await kvGetJson(env, `purchase:${id}`);
     if (!p) { await tgApi('sendMessage', { chat_id: chatId, text: 'سفارش یافت نشد.' }); return; }
-    const hdr = `خرید #${String(p.id).padStart(8,'0')}
+    const isPanel = p.type === 'panel';
+    const hdr = isPanel
+      ? `خرید پنل #${String(p.id).padStart(8,'0')}
+کاربر: ${p.user_id}
+پنل: ${p.panel_title||'-'}
+مبلغ: ${(p.price_toman||0).toLocaleString('fa-IR')} تومان
+وضعیت: ${p.status}`
+      : `خرید #${String(p.id).padStart(8,'0')}
 کاربر: ${p.user_id}
 بسته: ${p.diamonds} الماس
 مبلغ: ${(p.price_toman||0).toLocaleString('fa-IR')} تومان
 وضعیت: ${p.status}`;
     const actions = [];
     if (p.status === 'pending_review') {
-      actions.push(
-        [{ text: '✅ تایید و افزودن الماس', callback_data: `PAYAPP:${p.id}` }, { text: '❌ رد', callback_data: `PAYREJ:${p.id}` }]
-      );
+      if (isPanel) {
+        actions.push([{ text: '✉️ رفتن به پیوی کاربر', callback_data: `OPENPM:${p.user_id}` }, { text: '❌ رد', callback_data: `PAYREJ:${p.id}` }]);
+      } else {
+        actions.push([{ text: '✅ تایید و افزودن الماس', callback_data: `PAYAPP:${p.id}` }, { text: '❌ رد', callback_data: `PAYREJ:${p.id}` }]);
+      }
     }
     actions.push([{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PAYMENTS' }]);
     const kb = { inline_keyboard: actions };
@@ -1978,12 +1996,57 @@ ${lines.join('\n')}
     const id = data.split(':')[2];
     const it = await getPanelItem(env, id);
     if (!it) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد یافت نشد.' }); return; }
-    const caption = (it.desc || '').slice(0, 1024);
+    const caption = `${it.title}\n\n${(it.desc || '').slice(0, 900)}\n\n💰 مبلغ: ${(Number(it.price_toman||0)).toLocaleString('fa-IR')} تومان`;
     try {
-      await tgApi('sendPhoto', { chat_id: chatId, photo: it.photo_file_id, caption, reply_markup: { inline_keyboard: [[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+      await tgApi('sendPhoto', { chat_id: chatId, photo: it.photo_file_id, caption, reply_markup: { inline_keyboard: [[{ text: '🛒 خرید پنل', callback_data: `PANEL:BUY:${it.id}` }],[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
     } catch (_) {
-      await tgApi('sendMessage', { chat_id: chatId, text: `${it.title}\n\n${caption}`, reply_markup: { inline_keyboard: [[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+      await tgApi('sendMessage', { chat_id: chatId, text: caption, reply_markup: { inline_keyboard: [[{ text: '🛒 خرید پنل', callback_data: `PANEL:BUY:${it.id}` }],[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
     }
+    return;
+  }
+  if (data.startsWith('PANEL:BUY:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const id = data.split(':')[2];
+    const it = await getPanelItem(env, id);
+    if (!it) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد یافت نشد.' }); return; }
+    const pid = await generatePurchaseId(env);
+    const rec = { id: pid, user_id: uid, panel_id: it.id, panel_title: it.title, price_toman: Number(it.price_toman||0), status: 'awaiting_receipt', created_at: now(), type: 'panel' };
+    await kvPutJson(env, `purchase:${pid}`, rec);
+    try {
+      const idxKey = 'index:purchases';
+      const idx = (await kvGetJson(env, idxKey)) || [];
+      idx.unshift(pid);
+      if (idx.length > 1000) idx.length = 1000;
+      await kvPutJson(env, idxKey, idx);
+    } catch (_) {}
+    const txt = `🛒 خرید پنل: ${it.title}
+مبلغ: ${(Number(it.price_toman||0)).toLocaleString('fa-IR')} تومان
+شناسه خرید: \`${pid}\`
+لطفاً مبلغ را به کارت زیر واریز کنید و سپس «پرداخت کردم» را بزنید:
+
+کارت:
+\`${BANK_CARD_NUMBER}\`
+نام: **${BANK_CARD_NAME}**
+
+پس از تایید رسید، ادمین برای ارسال پنل و توضیحات به پیوی شما پیام می‌دهد.`;
+    await tgApi('sendMessage', { chat_id: chatId, text: txt, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+      [{ text: '✅ پرداخت کردم', callback_data: `PANEL:PAID:${pid}` }],
+      [{ text: '⬅️ بازگشت', callback_data: `PANEL:VIEW:${it.id}` }],
+      [{ text: '🏠 منو', callback_data: 'MENU' }]
+    ] } });
+    return;
+  }
+  if (data.startsWith('PANEL:PAID:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const pid = data.split(':')[2];
+    const key = `purchase:${pid}`;
+    const p = await kvGetJson(env, key);
+    if (!p || p.user_id !== uid || p.status !== 'awaiting_receipt' || p.type !== 'panel') {
+      await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ درخواست نامعتبر یا منقضی است.' });
+      return;
+    }
+    await setSession(env, uid, { awaiting: `payment_receipt:${pid}` });
+    await tgApi('sendMessage', { chat_id: chatId, text: `شناسه خرید شما: \`${pid}\`\nلطفاً عکس رسید پرداخت را ارسال کنید.`, parse_mode: 'Markdown' });
     return;
   }
   if (data === 'PRIVATE_SERVER') {
@@ -3292,6 +3355,10 @@ PersistentKeepalive = 25
       await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ درخواست نامعتبر است.' });
       return;
     }
+    if (purchase.type === 'panel') {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'این درخواست مربوط به پنل است. برای ادامه، از دکمه رفتن به پیوی استفاده کنید.' });
+      return;
+    }
     const userKey = `user:${purchase.user_id}`;
     const user = (await kvGetJson(env, userKey)) || { id: purchase.user_id, diamonds: 0 };
     user.diamonds = (user.diamonds || 0) + (purchase.diamonds || 0);
@@ -3313,8 +3380,22 @@ PersistentKeepalive = 25
     }
     purchase.status = 'rejected'; purchase.processed_by = uid; purchase.processed_at = now();
     await kvPutJson(env, key, purchase);
-    await tgApi('sendMessage', { chat_id: purchase.user_id, text: '❌ پرداخت شما تایید نشد. لطفاً با پشتیبانی تماس بگیرید.' });
+    const msg = purchase.type === 'panel'
+      ? '❌ پرداخت شما تایید نشد. برای پیگیری با پشتیبانی در ارتباط باشید.'
+      : '❌ پرداخت شما تایید نشد. لطفاً با پشتیبانی تماس بگیرید.';
+    await tgApi('sendMessage', { chat_id: purchase.user_id, text: msg });
     await tgApi('sendMessage', { chat_id: chatId, text: `درخواست ${id} رد شد.` });
+    return;
+  }
+  if (data.startsWith('OPENPM:') && isAdmin(uid)) {
+    const target = Number(data.split(':')[1]);
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const botUsername = await getBotUsername(env);
+    const link = botUsername ? `https://t.me/${botUsername}?start=${target}` : '';
+    await tgApi('sendMessage', { chat_id: chatId, text: link ? `برای رفتن به پیوی کاربر:
+${link}
+
+پس از انجام، وضعیت خرید را در سیستم خود به‌روزرسانی کنید.` : `یوزرنیم ربات تنظیم نشده است. به کاربر ${target} پیام دهید.` });
     return;
   }
   if (data === 'ADMIN:STATS' && isAdmin(uid)) {
@@ -5723,7 +5804,7 @@ async function listPanelItems(env, limit = 50) {
   return res;
 }
 async function getPanelItem(env, id) { return await kvGetJson(env, `pitem:${id}`); }
-async function createPanelItem(env, { title, desc, photo_file_id }) {
+async function createPanelItem(env, { title, desc, photo_file_id, price_toman }) {
   try {
     if (!title || !photo_file_id) return { ok: false, error: 'bad_params' };
     const id = `pi_${makeToken(6)}`;
@@ -5732,6 +5813,7 @@ async function createPanelItem(env, { title, desc, photo_file_id }) {
       title: String(title).slice(0, 80),
       desc: String(desc || '').slice(0, 2048),
       photo_file_id: String(photo_file_id),
+      price_toman: Number(price_toman || 0),
       created_at: now()
     };
     const idx = (await kvGetJson(env, await panelItemsIndexKey())) || [];
