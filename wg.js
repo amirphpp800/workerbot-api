@@ -42,7 +42,7 @@ export async function handleWireguardMyConfig(data, ctx) {
     return;
   }
   if (item.endpoint && item.name) {
-    const mtu = 1440;
+    const mtu = 1410;
     const address = `10.66.66.${randomIntInclusive(2, 254)}/24`;
     const allowed = '43.152.0.0/16, 45.40.0.0/16, 150.109.0.0/16, 161.117.0.0/16, 18.141.0.0/16, 34.87.0.0/16, 52.76.0.0/16, 52.220.0.0/16, 170.106.0.0/16, 125.209.222.0/24, 203.205.0.0/16';
     const conf = `[Interface]\nPrivateKey = (در زمان ساخت ذخیره نشده)\nAddress = ${address}\nDNS = 10.202.10.10\nMTU = ${mtu}\n\n[Peer]\nPublicKey = (در زمان ساخت ذخیره نشده)\nEndpoint = ${item.endpoint}\nAllowedIPs = ${allowed}\nPersistentKeepalive = 25\n`;
@@ -170,7 +170,7 @@ export async function handleWireguardCallback(data, ctx) {
     const endpoint = `${endpointHost}:51820`;
     const nameId = String(Math.floor(100000 + Math.random() * 900000));
     const name = `NoiD${nameId}`;
-    const mtu = 1440;
+    const mtu = 1410;
     const address = `10.66.66.${randomIntInclusive(2, 254)}/24`;
     const allowed = '43.152.0.0/16, 45.40.0.0/16, 150.109.0.0/16, 161.117.0.0/16, 18.141.0.0/16, 34.87.0.0/16, 52.76.0.0/16, 52.220.0.0/16, 170.106.0.0/16, 125.209.222.0/24, 203.205.0.0/16';
     const conf = `[Interface]\nPrivateKey = ${kp.privateKey}\nAddress = ${address}\nDNS = ${dnsV4}, ${dnsFixedV4}, ${dnsV6}\nMTU = ${mtu}\n\n[Peer]\nPublicKey = ${kp.publicKey}\nEndpoint = ${endpoint}\nAllowedIPs = ${allowed}\nPersistentKeepalive = 25\n`;
