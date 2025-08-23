@@ -519,6 +519,11 @@ async function buildDynamicMainMenu(env, uid) {
     { text: '🛡️ سرور اختصاصی', callback_data: 'PRIVATE_SERVER' }
   ]);
 
+  // Row 3: Buy Panel (single)
+  rows.push([
+    { text: '🛒 خرید پنل', callback_data: 'PANEL_BUY' }
+  ]);
+
   // Row 3: (Support removed per request)
 
   // Row 4: Lottery side-by-side with Missions
@@ -578,6 +583,9 @@ function buildAdminPanelKeyboard() {
   ]);
   rows.push([
     { text: '🧾 مدیریت تیکت‌ها', callback_data: 'ADMIN:TICKETS' }
+  ]);
+  rows.push([
+    { text: '🛍 مدیریت خرید پنل', callback_data: 'ADMIN:PANEL_ITEMS' }
   ]);
   rows.push([{ text: '🏠 بازگشت به منو', callback_data: 'MENU' }]);
   return { inline_keyboard: rows };
@@ -1390,6 +1398,31 @@ async function onMessage(msg, env) {
     await tgApi('sendMessage', { chat_id: chatId, text: 'جایزه (الماس) را ارسال کنید:' });
     return;
   }
+  // Admin add panel item: title -> photo -> desc
+  if (session.awaiting === 'pitem:add:title' && isAdmin(uid) && text) {
+    const draft = { title: text.trim().slice(0, 80) };
+    await setSession(env, uid, { awaiting: `pitem:add:photo:${encodeURIComponent(JSON.stringify(draft))}` });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'عکس مربوط به این پنل را ارسال کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  if (session.awaiting?.startsWith('pitem:add:photo:')) {
+    if (!isAdmin(uid)) { await setSession(env, uid, {}); await tgApi('sendMessage', { chat_id: chatId, text: 'فقط ادمین‌ها مجاز هستند.' }); return; }
+    const base = JSON.parse(decodeURIComponent(session.awaiting.split(':')[3]));
+    const p = msg.photo && msg.photo.length ? msg.photo[msg.photo.length - 1] : null;
+    if (!p) { await tgApi('sendMessage', { chat_id: chatId, text: 'لطفاً یک تصویر ارسال کنید.' }); return; }
+    base.photo_file_id = p.file_id;
+    await setSession(env, uid, { awaiting: `pitem:add:desc:${encodeURIComponent(JSON.stringify(base))}` });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'توضیحات (متن) پنل را ارسال کنید.' });
+    return;
+  }
+  if (session.awaiting?.startsWith('pitem:add:desc:') && text && isAdmin(uid)) {
+    const base = JSON.parse(decodeURIComponent(session.awaiting.split(':')[3]));
+    base.desc = text.trim().slice(0, 2048);
+    const res = await createPanelItem(env, base);
+    await setSession(env, uid, {});
+    await tgApi('sendMessage', { chat_id: chatId, text: res.ok ? '✅ آیتم خرید پنل ثبت شد.' : '❌ خطا در ثبت آیتم.' });
+    return;
+  }
   if (session.awaiting?.startsWith('mission_q:reward:') && isAdmin(uid) && text) {
     const draft = JSON.parse(decodeURIComponent(session.awaiting.split(':')[2]));
     const reward = Number(text.trim());
@@ -1854,6 +1887,60 @@ ${lines.join('\n')}
     await tgApi('sendMessage', { chat_id: chatId, text: isAdminUser ? adminGuide : userGuide });
     return;
   }
+  // -------- Admin: panel items management --------
+  if (data === 'ADMIN:PANEL_ITEMS' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const kb = { inline_keyboard: [
+      [{ text: '➕ افزودن آیتم', callback_data: 'ADMIN:PITEMS_ADD' }],
+      [{ text: '📃 لیست آیتم‌ها', callback_data: 'ADMIN:PITEMS_LIST' }],
+      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text: '🛍 مدیریت خرید پنل', reply_markup: kb });
+    return;
+  }
+  if (data === 'ADMIN:PITEMS_ADD' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await setSession(env, uid, { awaiting: 'pitem:add:title' });
+    await tgApi('sendMessage', { chat_id: chatId, text: 'عنوان دکمه/پنل را ارسال کنید:', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  if (data === 'ADMIN:PITEMS_LIST' && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const items = await listPanelItems(env);
+    if (!items.length) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'هیچ آیتمی ثبت نشده است.', reply_markup: { inline_keyboard: [[{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]] } });
+      return;
+    }
+    const kb = { inline_keyboard: [
+      ...items.map(it => ([
+        { text: `👁 ${it.title}`, callback_data: `ADMIN:PITEMS_VIEW:${it.id}` },
+        { text: '🗑 حذف', callback_data: `ADMIN:PITEMS_DEL:${it.id}` }
+      ])),
+      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]
+    ] };
+    await tgApi('sendMessage', { chat_id: chatId, text: 'فهرست آیتم‌ها:', reply_markup: kb });
+    return;
+  }
+  if (data.startsWith('ADMIN:PITEMS_VIEW:') && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const id = data.split(':')[2];
+    const it = await getPanelItem(env, id);
+    if (!it) { await tgApi('sendMessage', { chat_id: chatId, text: 'آیتم یافت نشد.' }); return; }
+    const caption = (it.desc || '').slice(0, 1024);
+    try {
+      await tgApi('sendPhoto', { chat_id: chatId, photo: it.photo_file_id, caption: `${it.title}\n\n${caption}`, reply_markup: { inline_keyboard: [[{ text: '🗑 حذف', callback_data: `ADMIN:PITEMS_DEL:${it.id}` }], [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PITEMS_LIST' }]] } });
+    } catch (_) {
+      await tgApi('sendMessage', { chat_id: chatId, text: `${it.title}\n\n${caption}`, reply_markup: { inline_keyboard: [[{ text: '🗑 حذف', callback_data: `ADMIN:PITEMS_DEL:${it.id}` }], [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PITEMS_LIST' }]] } });
+    }
+    return;
+  }
+  if (data.startsWith('ADMIN:PITEMS_DEL:') && isAdmin(uid)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const id = data.split(':')[2];
+    await deletePanelItem(env, id);
+    await tgApi('sendMessage', { chat_id: chatId, text: 'آیتم حذف شد.', reply_markup: { inline_keyboard: [[{ text: '↻ بروزرسانی فهرست', callback_data: 'ADMIN:PITEMS_LIST' }], [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]] } });
+    return;
+  }
   if (data === 'SUPPORT') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     // Redirect to account submenu support area
@@ -1864,6 +1951,39 @@ ${lines.join('\n')}
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     await setSession(env, uid, { awaiting: 'support_wait' });
     await tgApi('sendMessage', { chat_id: chatId, text: 'پیام خود را برای پشتیبانی ارسال کنید. می‌توانید متن، عکس یا فایل ارسال کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
+    return;
+  }
+  // -------- Panel buy (catalog) - user facing --------
+  if (data === 'PANEL_BUY') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const items = await listPanelItems(env);
+    if (!items.length) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'فعلاً موردی برای خرید پنل ثبت نشده است.', reply_markup: { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+      return;
+    }
+    const rows = [];
+    for (let i = 0; i < items.length; i += 2) {
+      const a = items[i];
+      const b = items[i+1];
+      const row = [{ text: a.title || `آیتم ${i+1}` , callback_data: `PANEL:VIEW:${a.id}` }];
+      if (b) row.push({ text: b.title || `آیتم ${i+2}`, callback_data: `PANEL:VIEW:${b.id}` });
+      rows.push(row);
+    }
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    await tgApi('sendMessage', { chat_id: chatId, text: 'یکی از پنل‌ها را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
+    return;
+  }
+  if (data.startsWith('PANEL:VIEW:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const id = data.split(':')[2];
+    const it = await getPanelItem(env, id);
+    if (!it) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد یافت نشد.' }); return; }
+    const caption = (it.desc || '').slice(0, 1024);
+    try {
+      await tgApi('sendPhoto', { chat_id: chatId, photo: it.photo_file_id, caption, reply_markup: { inline_keyboard: [[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+    } catch (_) {
+      await tgApi('sendMessage', { chat_id: chatId, text: `${it.title}\n\n${caption}`, reply_markup: { inline_keyboard: [[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+    }
     return;
   }
   if (data === 'PRIVATE_SERVER') {
@@ -5589,6 +5709,48 @@ async function redeemGiftCode(env, uid, code) {
   meta.used = (meta.used || 0) + 1;
   await kvPutJson(env, key, meta);
   return { ok: true, message: `🎁 ${meta.amount} الماس به حساب شما اضافه شد.` };
+}
+
+/* -------------------- Panel items (Buy Panel) -------------------- */
+async function panelItemsIndexKey() { return 'panel:items:index'; }
+async function listPanelItems(env, limit = 50) {
+  const idx = (await kvGetJson(env, await panelItemsIndexKey())) || [];
+  const res = [];
+  for (const id of idx.slice(0, limit)) {
+    const it = await kvGetJson(env, `pitem:${id}`);
+    if (it) res.push(it);
+  }
+  return res;
+}
+async function getPanelItem(env, id) { return await kvGetJson(env, `pitem:${id}`); }
+async function createPanelItem(env, { title, desc, photo_file_id }) {
+  try {
+    if (!title || !photo_file_id) return { ok: false, error: 'bad_params' };
+    const id = `pi_${makeToken(6)}`;
+    const meta = {
+      id,
+      title: String(title).slice(0, 80),
+      desc: String(desc || '').slice(0, 2048),
+      photo_file_id: String(photo_file_id),
+      created_at: now()
+    };
+    const idx = (await kvGetJson(env, await panelItemsIndexKey())) || [];
+    idx.unshift(id);
+    await kvPutJson(env, await panelItemsIndexKey(), idx);
+    await kvPutJson(env, `pitem:${id}`, meta);
+    return { ok: true, id };
+  } catch (_) {
+    return { ok: false, error: 'exception' };
+  }
+}
+async function deletePanelItem(env, id) {
+  try {
+    const idx = (await kvGetJson(env, await panelItemsIndexKey())) || [];
+    const next = idx.filter(x => x !== id);
+    await kvPutJson(env, await panelItemsIndexKey(), next);
+    await kvDelete(env, `pitem:${id}`);
+    return { ok: true };
+  } catch (_) { return { ok: false }; }
 }
 
 /* -------------------- Join/Admins management (KV backed) -------------------- */
