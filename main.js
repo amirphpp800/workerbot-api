@@ -2064,7 +2064,7 @@ async function onCallback(cb, env) {
       [{ text: '🔎 تغییر فیلتر', callback_data: 'ADMIN:PAYMENTS' }],
       [{ text: '⬅️ بازگشت به پنل', callback_data: 'ADMIN:PANEL' }]
     ] };
-    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
+    await safeUpdateText(chatId, text, kb, cb);
     return;
   }
   if (data.startsWith('ADMIN:PAYMENTS:') && isAdmin(uid)) {
@@ -2233,6 +2233,13 @@ async function onCallback(cb, env) {
     await tgApi('sendMessage', { chat_id: chatId, text: 'پیام خود را برای پشتیبانی ارسال کنید. می‌توانید متن، عکس یا فایل ارسال کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
     return;
   }
+  // Global cancel: clear session and go back to menu (edit in place if possible)
+  if (data === 'CANCEL') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    await setSession(env, uid, {});
+    await safeUpdateText(chatId, 'لغو شد. منوی اصلی:', await buildDynamicMainMenu(env, uid), cb);
+    return;
+  }
   // -------- Panel buy (catalog) - user facing --------
   if (data === 'PANEL_BUY') {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
@@ -2325,7 +2332,7 @@ async function onCallback(cb, env) {
       [{ text: '🛰 وایرگارد اختصاصی', callback_data: 'PS:WG' }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: '🛡️ سرور اختصاصی — یک گزینه را انتخاب کنید:', reply_markup: kb });
+    await safeUpdateText(chatId, '🛡️ سرور اختصاصی — یک گزینه را انتخاب کنید:', kb, cb);
     return;
   }
   if (data === 'PS:OVPN') {
@@ -2337,7 +2344,7 @@ async function onCallback(cb, env) {
     const rows = codes.map(code => ([{ text: `${countryFlag(code)} ${dnsCountryLabel(code)}`, callback_data: `PS:OVPN_LOC:${code}` }]));
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PRIVATE_SERVER' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    await tgApi('sendMessage', { chat_id: chatId, text: '🔒 OpenVPN — کشور/لوکیشن را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
+    await safeUpdateText(chatId, '🔒 OpenVPN — کشور/لوکیشن را انتخاب کنید:', { inline_keyboard: rows }, cb);
     return;
   }
   if (data.startsWith('PS:OVPN_LOC:')) {
@@ -2361,7 +2368,7 @@ async function onCallback(cb, env) {
     }
     rows.push([{ text: '⬅️ بازگشت', callback_data: 'PS:OVPN' }]);
     rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    await tgApi('sendMessage', { chat_id: chatId, text: `🔒 OpenVPN — ${countryFlag(code)} ${dnsCountryLabel(code)} — سرور را انتخاب کنید:`, reply_markup: { inline_keyboard: rows } });
+    await safeUpdateText(chatId, `🔒 OpenVPN — ${countryFlag(code)} ${dnsCountryLabel(code)} — سرور را انتخاب کنید:`, { inline_keyboard: rows }, cb);
     return;
   }
   if (data.startsWith('PS:OVPN_SEL2:')) {
@@ -2377,9 +2384,9 @@ async function onCallback(cb, env) {
       [{ text: '⬅️ بازگشت', callback_data: `PS:OVPN_LOC:${code}` }],
       [{ text: '🏠 منو', callback_data: 'MENU' }]
     ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: `لوکیشن انتخاب شد:
+    await safeUpdateText(chatId, `لوکیشن انتخاب شد:
 ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
-نوع پروتکل را انتخاب کنید:`, reply_markup: kb });
+نوع پروتکل را انتخاب کنید:`, kb, cb);
     return;
   }
   if (data.startsWith('PS:OVPN_CONF2:')) {
