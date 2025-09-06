@@ -1670,42 +1670,16 @@ async function onMessage(msg, env) {
     }
   }
 
-  // Capture referral/pending intent from /start payload BEFORE enforcing join
+  // On /start: do not preserve any pending operation; everything resets on restart
   try {
     if (text.startsWith('/start')) {
-      // Update mode: block regular users
       const updateMode = (await kvGetJson(env, 'bot:update_mode')) || false;
       if (updateMode && !isAdmin(uid)) {
         await tgApi('sendMessage', { chat_id: chatId, text: '🔧 ربات در حال بروزرسانی است. لطفاً دقایقی دیگر مجدداً تلاش کنید.' });
         return;
       }
-      const payload = text.replace('/start', '').trim();
-      if (payload) {
-        // Clone current session to avoid losing existing awaiting state
-        const currentSession = { ...(session || {}) };
-        if (payload.startsWith('d_')) {
-          // deep link download: d_<token>_<ref?>
-          const parts = payload.split('_');
-          const token = parts[1] || '';
-          const ref = parts[2] || '';
-          currentSession.pending_download = { token, ref };
-          // persist referrer on user profile if provided
-          if (ref && !user.referred_by && Number(ref) !== Number(uid)) {
-            user.referred_by = Number(ref);
-            await kvPutJson(env, userKey, user);
-          }
-        } else {
-          const refId = Number(payload);
-          if (Number.isFinite(refId) && refId !== Number(uid)) {
-            if (!user.referred_by) {
-              user.referred_by = refId;
-              await kvPutJson(env, userKey, user);
-            }
-            currentSession.pending_ref = refId;
-          }
-        }
-        await setSession(env, uid, currentSession);
-      }
+      // Hard reset of session/state on /start
+      await setSession(env, uid, {});
     }
   } catch (_) {}
 
@@ -1721,42 +1695,7 @@ async function onMessage(msg, env) {
 
   // commands
   if (text.startsWith('/start')) {
-    const payload = text.replace('/start', '').trim();
-    if (payload) {
-      if (payload.startsWith('d_')) {
-        // deep link download: d_<token>_<ref?>
-        const parts = payload.split('_');
-        const token = parts[1] || '';
-        const ref = parts[2] || '';
-        await handleBotDownload(env, uid, chatId, token, ref);
-        return;
-      }
-      // generic referral: payload is referrer id
-      const refId = Number(payload);
-      if (Number.isFinite(refId) && refId !== Number(uid)) {
-        const refUser = (await kvGetJson(env, `user:${refId}`)) || null;
-        if (refUser) {
-          // persist referred_by if not already set
-          user.referred_by = user.referred_by || refId;
-          // credit only once per referred user
-          if (!user.ref_credited) {
-            refUser.diamonds = (refUser.diamonds || 0) + 1;
-            refUser.referrals = (refUser.referrals || 0) + 1;
-            await kvPutJson(env, `user:${refId}`, refUser);
-            user.ref_credited = true;
-            // track weekly referral for missions (credit to referrer)
-            const wk = weekKey();
-            const rk = `ref_week:${refId}:${wk}`;
-            const rec = (await kvGetJson(env, rk)) || { count: 0 };
-            rec.count = (rec.count || 0) + 1;
-            await kvPutJson(env, rk, rec);
-            // notify referrer
-            await tgApi('sendMessage', { chat_id: refId, text: '🎉 یک الماس بابت معرفی کاربر جدید دریافت کردید.' });
-          }
-          await kvPutJson(env, userKey, user);
-        }
-      }
-    }
+    // Ignore payloads on restart; just show welcome and main menu
     const updateMode = (await kvGetJson(env, 'bot:update_mode')) || false;
     const settings = await getSettings(env);
     const welcomeText = settings.welcome_message && !updateMode
@@ -3261,6 +3200,122 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
     file.downloads = (file.downloads || 0) + 1; file.last_download = now();
     try { await addFileTaker(env, token, uid); } catch (_) {}
     await kvPutJson(env, `file:${token}`, file);
+    return;
+  }
+  
+  // Handle confirmation to spend diamonds and receive the file
+  if (data.startsWith('CONFIRM_SPEND:')) {
+    try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); } catch (_) {}
+    const parts = data.split(':');
+    const token = parts[1] || '';
+    const needed = Number(parts[2] || '0') || 0;
+    const ref = parts[3] || '';
+    if (!isValidTokenFormat(token)) { await tgApi('sendMessage', { chat_id: chatId, text: 'توکن نامعتبر' }); return; }
+    const file = await kvGetJson(env, `file:${token}`);
+    if (!file) { await tgApi('sendMessage', { chat_id: chatId, text: 'فایل یافت نشد' }); return; }
+
+    // Validate session intent to prevent accidental or forged clicks
+    const session = await getSession(env, uid);
+    const expected = `confirm_spend:${token}:${needed}:${ref||''}`;
+    if (!session.awaiting || !String(session.awaiting).startsWith(`confirm_spend:${token}:`)) {
+      await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ این درخواست معتبر نیست یا منقضی شده است.' });
+      return;
+    }
+
+    // Re-check service/update/disabled status
+    const enabled = (await kvGetJson(env, 'bot:enabled')) ?? true;
+    const updateMode = (await kvGetJson(env, 'bot:update_mode')) || false;
+    if (!enabled) { await tgApi('sendMessage', { chat_id: chatId, text: 'سرویس موقتا غیرفعال است' }); return; }
+    if (updateMode && !isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: '🔧 ربات در حال بروزرسانی است. لطفاً دقایقی دیگر مجدداً تلاش کنید.' }); return; }
+    if (file.disabled) { await tgApi('sendMessage', { chat_id: chatId, text: 'فایل توسط مالک/ادمین غیرفعال شده است' }); return; }
+
+    // Enforce per-file download limit
+    if ((file.max_downloads || 0) > 0 && (file.downloads || 0) >= file.max_downloads) {
+      await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ ظرفیت دانلود این فایل به پایان رسیده است.' });
+      return;
+    }
+
+    // Enforce required channels
+    const req = await getRequiredChannels(env);
+    if (req.length && !(await isUserJoinedAllRequiredChannels(env, uid))) {
+      await presentJoinPrompt(env, chatId);
+      return;
+    }
+
+    // Check and deduct diamonds
+    const uKey = `user:${uid}`;
+    const user = (await kvGetJson(env, uKey)) || { id: uid, diamonds: 0 };
+    if (user.frozen && !isAdmin(uid)) { await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ موجودی شما فریز است.' }); return; }
+    const cost = Number(file.cost_points || 0);
+    if (cost !== needed) {
+      // If cost changed since prompt, ask user to restart
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: 'مبلغ تغییر کرده است. دوباره تلاش کنید.' });
+      return;
+    }
+    if ((user.diamonds || 0) < cost) {
+      await setSession(env, uid, {});
+      await tgApi('sendMessage', { chat_id: chatId, text: `⚠️ الماس کافی ندارید. نیاز: ${cost} | الماس شما: ${user.diamonds||0}` });
+      return;
+    }
+
+    // Daily usage limit (if applicable) before spending
+    const settings = await getSettings(env);
+    const limit = settings.daily_limit || 0;
+    if (limit > 0 && !isAdmin(uid)) {
+      const dk = `usage:${uid}:${dayKey()}`;
+      const used = (await kvGetJson(env, dk)) || { count: 0 };
+      if ((used.count || 0) >= limit) {
+        await tgApi('sendMessage', { chat_id: chatId, text: `به سقف روزانه استفاده (${limit}) رسیده‌اید.` });
+        return;
+      }
+    }
+
+    // Deduct and persist
+    user.diamonds = (user.diamonds || 0) - cost;
+    await kvPutJson(env, uKey, user);
+    await setSession(env, uid, {});
+
+    // Optional referral credit on first successful paid download
+    if (ref && String(ref) !== String(file.owner)) {
+      const currentUser = (await kvGetJson(env, `user:${uid}`)) || { id: uid };
+      if (!currentUser.ref_credited) {
+        const refUser = (await kvGetJson(env, `user:${ref}`)) || null;
+        if (refUser) {
+          refUser.diamonds = (refUser.diamonds || 0) + 1;
+          refUser.referrals = (refUser.referrals || 0) + 1;
+          await kvPutJson(env, `user:${ref}`, refUser);
+          currentUser.ref_credited = true;
+          currentUser.referred_by = currentUser.referred_by || Number(ref);
+          await kvPutJson(env, `user:${uid}`, currentUser);
+          try { await tgApi('sendMessage', { chat_id: Number(ref), text: '🎉 یک الماس بابت معرفی دریافت کردید.' }); } catch (_) {}
+        }
+      }
+    }
+
+    // Deliver and update stats
+    await deliverStoredContent(chatId, file);
+    file.downloads = (file.downloads || 0) + 1; file.last_download = now();
+    try { await addFileTaker(env, token, uid); } catch (_) {}
+    await kvPutJson(env, `file:${token}`, file);
+
+    // If reached limit after increment and flagged, delete
+    if ((file.max_downloads || 0) > 0 && (file.downloads || 0) >= file.max_downloads && file.delete_on_limit) {
+      try {
+        const upKey = `uploader:${file.owner}`;
+        const upList = (await kvGetJson(env, upKey)) || [];
+        await kvPutJson(env, upKey, upList.filter(t => t !== token));
+        await kvDelete(env, `file:${token}`);
+      } catch (_) {}
+    }
+
+    // Increase daily usage count after success
+    if ((settings.daily_limit || 0) > 0 && !isAdmin(uid)) {
+      const dk = `usage:${uid}:${dayKey()}`;
+      const used = (await kvGetJson(env, dk)) || { count: 0 };
+      used.count = (used.count || 0) + 1;
+      await kvPutJson(env, dk, used);
+    }
     return;
   }
   
