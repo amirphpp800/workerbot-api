@@ -2216,6 +2216,32 @@ async function onCallback(cb, env) {
     await tgApi('sendMessage', { chat_id: chatId, text: 'پیام خود را برای پشتیبانی ارسال کنید. می‌توانید متن، عکس یا فایل ارسال کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
     return;
   }
+  // -------- Panel buy (catalog) - user facing --------
+  if (data === 'PANEL_BUY') {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const items = await listPanelItems(env);
+    if (!items.length) {
+      await safeUpdateText(chatId, 'فعلاً موردی برای خرید پنل ثبت نشده است.', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] }, cb);
+      return;
+    }
+    const rows = items.map(it => ([{ text: it.title || 'آیتم', callback_data: `PANEL:VIEW:${it.id}` }]));
+    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
+    await safeUpdateText(chatId, 'یکی از پنل‌ها را انتخاب کنید:', { inline_keyboard: rows }, cb);
+    return;
+  }
+  if (data.startsWith('PANEL:VIEW:')) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    const id = data.split(':')[2];
+    const it = await getPanelItem(env, id);
+    if (!it) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد یافت نشد.' }); return; }
+    const caption = `${it.title}\n\n${(it.desc || '').slice(0, 900)}\n\n💰 مبلغ: ${(Number(it.price_toman||0)).toLocaleString('fa-IR')} تومان`;
+    try {
+      await tgApi('sendPhoto', { chat_id: chatId, photo: it.photo_file_id, caption, reply_markup: { inline_keyboard: [[{ text: '🛒 خرید پنل', callback_data: `PANEL:BUY:${it.id}` }],[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+    } catch (_) {
+      await tgApi('sendMessage', { chat_id: chatId, text: caption, reply_markup: { inline_keyboard: [[{ text: '🛒 خرید پنل', callback_data: `PANEL:BUY:${it.id}` }],[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
+    }
+    return;
+  }
   // Admin TAKERS: list of users who downloaded a file
   if (data.startsWith('TAKERS:') && isAdmin(uid)) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
