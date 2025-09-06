@@ -191,6 +191,24 @@ async function tgUpload(method, formData) {
   }).then(r => r.json());
 }
 
+// Edit-in-place helper to reduce chat clutter (tries to edit callback message; falls back to send)
+async function safeUpdateText(chatId, text, reply_markup, cb, parse_mode) {
+  try {
+    if (cb && cb.message && cb.message.message_id) {
+      return await tgApi('editMessageText', {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        text,
+        reply_markup,
+        parse_mode
+      });
+    }
+  } catch (_) {
+    // ignore and fall back to send
+  }
+  return await tgApi('sendMessage', { chat_id: chatId, text, reply_markup, parse_mode });
+}
+
 // Bot info helpers
 async function getBotInfo(env) {
   const token = RUNTIME.tgToken || TELEGRAM_TOKEN;
@@ -450,6 +468,24 @@ function weekKey(ts = now()) {
   return `${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
 }
 
+// ---- File takers helpers (track which users downloaded each file) ----
+async function addFileTaker(env, token, uid) {
+  try {
+    const key = `file:${token}:takers`;
+    const list = (await kvGetJson(env, key)) || [];
+    if (!list.find(x => String(x.id) === String(uid))) {
+      list.unshift({ id: uid, at: now() });
+      if (list.length > 500) list.length = 500; // cap
+      await kvPutJson(env, key, list);
+    }
+  } catch (_) {}
+}
+async function getFileTakers(env, token, limit = 50) {
+  const key = `file:${token}:takers`;
+  const list = (await kvGetJson(env, key)) || [];
+  return list.slice(0, limit);
+}
+
 /* -------------------- Security helpers -------------------- */
 function isValidTokenFormat(token) {
   if (!token || typeof token !== 'string') return false;
@@ -602,6 +638,9 @@ function buildFileManageKeyboard(token, file, isAdminUser) {
       { text: `💰 هزینه (${(file?.cost_points||0)})`, callback_data: `COST:${token}` },
       { text: file?.disabled ? '🟢 فعال‌سازی' : '🔴 غیرفعال', callback_data: `TOGGLE:${token}` },
       { text: '🗑 حذف', callback_data: `DEL:${token}` }
+    ]);
+    rows.push([
+      { text: '👥 دریافت‌کنندگان', callback_data: `TAKERS:${token}` }
     ]);
     rows.push([
       { text: `🔒 محدودیت (${(file?.max_downloads||0) > 0 ? file.max_downloads : '∞'})`, callback_data: `LIMIT:${token}` },
@@ -778,6 +817,41 @@ async function onMessage(msg, env) {
       if (!joinedAll0) { await presentJoinPrompt(env, chatId); return; }
     }
     await sendMainMenu(env, chatId, uid);
+    return;
+  }
+
+  // Admin: lookup user by ID => /who <id>
+  if (text.startsWith('/who') && isAdmin(uid)) {
+    const parts = text.split(/\s+/);
+    const targetId = Number(parts[1] || '');
+    if (!Number.isFinite(targetId) || targetId <= 0) {
+      await tgApi('sendMessage', { chat_id: chatId, text: 'استفاده: /who <uid>' });
+      return;
+    }
+    const tKey = `user:${targetId}`;
+    const u = (await kvGetJson(env, tKey)) || null;
+    const upKey = `uploader:${targetId}`;
+    const list = (await kvGetJson(env, upKey)) || [];
+    let totalDownloads = 0;
+    for (const tok of list.slice(0, 300)) {
+      const f = await kvGetJson(env, `file:${tok}`);
+      if (f && f.downloads) totalDownloads += f.downloads;
+    }
+    if (!u) {
+      await tgApi('sendMessage', { chat_id: chatId, text: `کاربر ${targetId} یافت نشد.` });
+      return;
+    }
+    const info = `👤 اطلاعات کاربر
+آی‌دی: ${u.id}
+یوزرنیم: ${u.username || '-'}
+نام: ${u.first_name || '-'}
+الماس: ${u.diamonds || 0}${u.frozen ? ' (فریز)' : ''}
+زیرمجموعه‌ها: ${u.referrals || 0}
+تاریخ عضویت: ${u.created_at ? formatDate(u.created_at) : '-'}
+آخرین فعالیت: ${u.last_seen ? formatDate(u.last_seen) : '-'}
+تعداد فایل‌های آپلودی: ${list.length}
+جمع دانلود فایل‌ها: ${totalDownloads}`;
+    await tgApi('sendMessage', { chat_id: chatId, text: info });
     return;
   }
 
@@ -1872,7 +1946,7 @@ async function onCallback(cb, env) {
       const joined = await isUserJoinedAllRequiredChannels(env, uid);
       if (!joined) { await presentJoinPrompt(env, chatId); return; }
     }
-    await tgApi('sendMessage', { chat_id: chatId, text: 'منوی اصلی:', reply_markup: await buildDynamicMainMenu(env, uid) });
+    await safeUpdateText(chatId, 'منوی اصلی:', await buildDynamicMainMenu(env, uid), cb);
     return;
   }
   if (data === 'NOOP') {
@@ -1885,7 +1959,7 @@ async function onCallback(cb, env) {
   }
   if (data === 'ADMIN:PANEL' && isAdmin(uid)) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    await tgApi('sendMessage', { chat_id: chatId, text: '🛠 پنل مدیریت', reply_markup: buildAdminPanelKeyboard() });
+    await safeUpdateText(chatId, '🛠 پنل مدیریت', buildAdminPanelKeyboard(), cb);
     return;
   }
   if (data === 'ADMIN:BACKUP' && isAdmin(uid)) {
@@ -2085,7 +2159,7 @@ async function onCallback(cb, env) {
       [{ text: '📃 لیست آیتم‌ها', callback_data: 'ADMIN:PITEMS_LIST' }],
       [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL' }]
     ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: '🛍 مدیریت خرید پنل', reply_markup: kb });
+    await safeUpdateText(chatId, '🛍 مدیریت خرید پنل', kb, cb);
     return;
   }
   if (data === 'ADMIN:PITEMS_ADD' && isAdmin(uid)) {
@@ -2098,17 +2172,16 @@ async function onCallback(cb, env) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const items = await listPanelItems(env);
     if (!items.length) {
-      await tgApi('sendMessage', { chat_id: chatId, text: 'هیچ آیتمی ثبت نشده است.', reply_markup: { inline_keyboard: [[{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]] } });
+      await safeUpdateText(chatId, 'هیچ آیتمی ثبت نشده است.', { inline_keyboard: [[{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]] }, cb);
       return;
     }
-    const kb = { inline_keyboard: [
-      ...items.map(it => ([
-        { text: `👁 ${it.title}`, callback_data: `ADMIN:PITEMS_VIEW:${it.id}` },
-        { text: '🗑 حذف', callback_data: `ADMIN:PITEMS_DEL:${it.id}` }
-      ])),
-      [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]
-    ] };
-    await tgApi('sendMessage', { chat_id: chatId, text: 'فهرست آیتم‌ها:', reply_markup: kb });
+    const rows = [];
+    for (const it of items) {
+      rows.push([{ text: `👁 ${it.title}`, callback_data: `ADMIN:PITEMS_VIEW:${it.id}` }]);
+      rows.push([{ text: '🗑 حذف', callback_data: `ADMIN:PITEMS_DEL:${it.id}` }]);
+    }
+    rows.push([{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]);
+    await safeUpdateText(chatId, 'فهرست آیتم‌ها:', { inline_keyboard: rows }, cb);
     return;
   }
   if (data.startsWith('ADMIN:PITEMS_VIEW:') && isAdmin(uid)) {
@@ -2128,7 +2201,7 @@ async function onCallback(cb, env) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
     const id = data.split(':')[2];
     await deletePanelItem(env, id);
-    await tgApi('sendMessage', { chat_id: chatId, text: 'آیتم حذف شد.', reply_markup: { inline_keyboard: [[{ text: '↻ بروزرسانی فهرست', callback_data: 'ADMIN:PITEMS_LIST' }], [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]] } });
+    await safeUpdateText(chatId, 'آیتم حذف شد.', { inline_keyboard: [[{ text: '↻ بروزرسانی فهرست', callback_data: 'ADMIN:PITEMS_LIST' }], [{ text: '⬅️ بازگشت', callback_data: 'ADMIN:PANEL_ITEMS' }]] }, cb);
     return;
   }
   if (data === 'SUPPORT') {
@@ -2143,37 +2216,17 @@ async function onCallback(cb, env) {
     await tgApi('sendMessage', { chat_id: chatId, text: 'پیام خود را برای پشتیبانی ارسال کنید. می‌توانید متن، عکس یا فایل ارسال کنید.', reply_markup: { inline_keyboard: [[{ text: '❌ انصراف', callback_data: 'CANCEL' }]] } });
     return;
   }
-  // -------- Panel buy (catalog) - user facing --------
-  if (data === 'PANEL_BUY') {
+  // Admin TAKERS: list of users who downloaded a file
+  if (data.startsWith('TAKERS:') && isAdmin(uid)) {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    const items = await listPanelItems(env);
-    if (!items.length) {
-      await tgApi('sendMessage', { chat_id: chatId, text: 'فعلاً موردی برای خرید پنل ثبت نشده است.', reply_markup: { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'MENU' }]] } });
-      return;
-    }
-    const rows = [];
-    for (let i = 0; i < items.length; i += 2) {
-      const a = items[i];
-      const b = items[i+1];
-      const row = [{ text: a.title || `آیتم ${i+1}` , callback_data: `PANEL:VIEW:${a.id}` }];
-      if (b) row.push({ text: b.title || `آیتم ${i+2}`, callback_data: `PANEL:VIEW:${b.id}` });
-      rows.push(row);
-    }
-    rows.push([{ text: '🏠 منو', callback_data: 'MENU' }]);
-    await tgApi('sendMessage', { chat_id: chatId, text: 'یکی از پنل‌ها را انتخاب کنید:', reply_markup: { inline_keyboard: rows } });
-    return;
-  }
-  if (data.startsWith('PANEL:VIEW:')) {
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
-    const id = data.split(':')[2];
-    const it = await getPanelItem(env, id);
-    if (!it) { await tgApi('sendMessage', { chat_id: chatId, text: 'مورد یافت نشد.' }); return; }
-    const caption = `${it.title}\n\n${(it.desc || '').slice(0, 900)}\n\n💰 مبلغ: ${(Number(it.price_toman||0)).toLocaleString('fa-IR')} تومان`;
-    try {
-      await tgApi('sendPhoto', { chat_id: chatId, photo: it.photo_file_id, caption, reply_markup: { inline_keyboard: [[{ text: '🛒 خرید پنل', callback_data: `PANEL:BUY:${it.id}` }],[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
-    } catch (_) {
-      await tgApi('sendMessage', { chat_id: chatId, text: caption, reply_markup: { inline_keyboard: [[{ text: '🛒 خرید پنل', callback_data: `PANEL:BUY:${it.id}` }],[{ text: '⬅️ بازگشت', callback_data: 'PANEL_BUY' }], [{ text: '🏠 منو', callback_data: 'MENU' }]] } });
-    }
+    const token = data.split(':')[1];
+    const f = await kvGetJson(env, `file:${token}`);
+    if (!f) { await tgApi('sendMessage', { chat_id: chatId, text: 'فایل یافت نشد.' }); return; }
+    const list = await getFileTakers(env, token, 50);
+    const lines = list.length ? list.map((it, i) => `${i+1}. ${it.id} — ${formatDate(it.at)}`).join('\n') : '—';
+    const text = `👥 لیست دریافت‌کنندگان (${(f.name||'file')})\n\n${lines}`;
+    const kb = { inline_keyboard: [[{ text: '⬅️ بازگشت', callback_data: `DETAILS:${token}:0` }], [{ text: '🏠 منو', callback_data: 'MENU' }]] };
+    await tgApi('sendMessage', { chat_id: chatId, text, reply_markup: kb });
     return;
   }
   if (data.startsWith('PANEL:BUY:')) {
@@ -3151,80 +3204,11 @@ ${countryFlag(code)} ${dnsCountryLabel(code)} — ${s.host}:${s.port}
     await deliverStoredContent(chatId, file);
     // update download stats
     file.downloads = (file.downloads || 0) + 1; file.last_download = now();
+    try { await addFileTaker(env, token, uid); } catch (_) {}
     await kvPutJson(env, `file:${token}`, file);
     return;
   }
-  if (data.startsWith('CONFIRM_SPEND:')) {
-    const [, token, neededStr, ref = ''] = data.split(':');
-    if (!isValidTokenFormat(token)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'توکن نامعتبر' }); return; }
-    const needed = parseInt(neededStr, 10) || 0;
-    const file = await kvGetJson(env, `file:${token}`);
-    if (!file) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'یافت نشد' }); return; }
-    const ok = await checkRateLimit(env, uid, 'confirm_spend_click', 5, 60_000);
-    if (!ok) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'سریع‌تر از حد مجاز' }); return; }
-    // daily limit enforcement
-    const settings = await getSettings(env);
-    const limit = settings.daily_limit || 0;
-    if (limit > 0 && !isAdmin(uid)) {
-      const dk = `usage:${uid}:${dayKey()}`;
-      const used = (await kvGetJson(env, dk)) || { count: 0 };
-      if ((used.count || 0) >= limit) {
-        await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'سقف روزانه پر شده' });
-        return;
-      }
-    }
-    const user = (await kvGetJson(env, `user:${uid}`)) || { diamonds: 0 };
-    if (user.frozen && !isAdmin(uid)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'موجودی شما فریز است' }); return; }
-    if ((user.diamonds || 0) < needed) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'الماس کافی نیست' }); return; }
-    user.diamonds = (user.diamonds || 0) - needed; await kvPutJson(env, `user:${uid}`, user);
-    await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'پرداخت شد' });
-    // per-file limit enforcement before delivery
-    if ((file.max_downloads || 0) > 0 && (file.downloads || 0) >= file.max_downloads) {
-      await tgApi('sendMessage', { chat_id: chatId, text: '⛔️ ظرفیت دانلود این فایل به پایان رسیده است.' });
-      if (file.delete_on_limit) {
-        try {
-          const upKey = `uploader:${file.owner}`;
-          const upList = (await kvGetJson(env, upKey)) || [];
-          await kvPutJson(env, upKey, upList.filter(t => t !== token));
-          await kvDelete(env, `file:${token}`);
-        } catch (_) {}
-      }
-      return;
-    }
-    // deliver file
-    await deliverStoredContent(chatId, file);
-    file.downloads = (file.downloads || 0) + 1; file.last_download = now();
-    await kvPutJson(env, `file:${token}`, file);
-    if ((file.max_downloads || 0) > 0 && (file.downloads || 0) >= file.max_downloads && file.delete_on_limit) {
-      try {
-        const upKey = `uploader:${file.owner}`;
-        const upList = (await kvGetJson(env, upKey)) || [];
-        await kvPutJson(env, upKey, upList.filter(t => t !== token));
-        await kvDelete(env, `file:${token}`);
-      } catch (_) {}
-    }
-    if ((limit > 0) && !isAdmin(uid)) {
-      const dk = `usage:${uid}:${dayKey()}`;
-      const used = (await kvGetJson(env, dk)) || { count: 0 };
-      used.count = (used.count || 0) + 1;
-      await kvPutJson(env, dk, used);
-    }
-    // referral credit if any
-    if (ref && String(ref) !== String(file.owner)) {
-      if (!user.ref_credited) {
-        const refUser = (await kvGetJson(env, `user:${ref}`)) || null;
-        if (refUser) {
-          refUser.diamonds = (refUser.diamonds || 0) + 1;
-          refUser.referrals = (refUser.referrals || 0) + 1;
-          await kvPutJson(env, `user:${ref}`, refUser);
-          user.ref_credited = true;
-          user.referred_by = user.referred_by || Number(ref);
-          await kvPutJson(env, `user:${uid}`, user);
-        }
-      }
-    }
-    return;
-  }
+  
   if (data.startsWith('COST:')) {
     const token = data.split(':')[1];
     if (!isAdmin(uid)) { await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'فقط ادمین' }); return; }
@@ -5525,6 +5509,7 @@ async function handleBotDownload(env, uid, chatId, token, ref) {
 
   // stats + usage increment
   file.downloads = (file.downloads || 0) + 1; file.last_download = now();
+  try { await addFileTaker(env, token, uid); } catch (_) {}
   await kvPutJson(env, `file:${token}`, file);
 
   // if reached limit after increment, optionally delete
