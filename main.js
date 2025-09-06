@@ -5570,6 +5570,14 @@ async function handleBotDownload(env, uid, chatId, token, ref) {
   // enforce required channel membership for non-admins
   const req = await getRequiredChannels(env);
   if (req.length && !(await isUserJoinedAllRequiredChannels(env, uid))) {
+    // Persist pending download (token/ref) so we can continue after user joins
+    try {
+      const s = await getSession(env, uid);
+      const next = { ...(s || {}) };
+      next.pending_download = { token, ref: ref || '' };
+      if (ref) next.pending_ref = ref;
+      await setSession(env, uid, next);
+    } catch (_) {}
     await presentJoinPrompt(env, chatId);
     return;
   }
