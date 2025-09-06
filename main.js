@@ -1695,8 +1695,16 @@ async function onMessage(msg, env) {
 
   // commands
   if (text.startsWith('/start')) {
-    // Ignore payloads on restart; just show welcome and main menu
+    // Re-enable deep-link downloads while still resetting session on /start
     const updateMode = (await kvGetJson(env, 'bot:update_mode')) || false;
+    const payload = text.replace('/start', '').trim();
+    if (payload && payload.startsWith('d_')) {
+      const parts = payload.split('_');
+      const token = parts[1] || '';
+      const ref = parts[2] || '';
+      await handleBotDownload(env, uid, chatId, token, ref);
+      return;
+    }
     const settings = await getSettings(env);
     const welcomeText = settings.welcome_message && !updateMode
       ? settings.welcome_message
