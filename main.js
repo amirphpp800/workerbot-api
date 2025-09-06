@@ -1705,6 +1705,48 @@ async function onMessage(msg, env) {
       await handleBotDownload(env, uid, chatId, token, ref);
       return;
     }
+    // Support referral-only deep links: /start <refId>
+    if (payload) {
+      const refIdNum = Number(payload);
+      if (Number.isFinite(refIdNum) && refIdNum > 0 && refIdNum !== Number(uid)) {
+        // Save pending ref in session and user meta (if not already set)
+        try {
+          const s = await getSession(env, uid);
+          const next = { ...(s || {}) };
+          next.pending_ref = String(refIdNum);
+          await setSession(env, uid, next);
+        } catch (_) {}
+        const uKey = `user:${uid}`;
+        const uMeta = (await kvGetJson(env, uKey)) || { id: uid };
+        if (!uMeta.referred_by) { uMeta.referred_by = refIdNum; await kvPutJson(env, uKey, uMeta); }
+        // Enforce join before crediting
+        const requireJoin2 = await getRequiredChannels(env);
+        if (requireJoin2.length && !isAdmin(uid)) {
+          const joinedAll2 = await isUserJoinedAllRequiredChannels(env, uid);
+          if (!joinedAll2) { await presentJoinPrompt(env, chatId); return; }
+        }
+        // If already joined, credit immediately (once)
+        const userNow = (await kvGetJson(env, uKey)) || { id: uid };
+        if (!userNow.ref_credited) {
+          const refUser = (await kvGetJson(env, `user:${refIdNum}`)) || null;
+          if (refUser) {
+            refUser.diamonds = (refUser.diamonds || 0) + 1;
+            refUser.referrals = (refUser.referrals || 0) + 1;
+            await kvPutJson(env, `user:${refIdNum}`, refUser);
+            userNow.ref_credited = true;
+            userNow.referred_by = userNow.referred_by || refIdNum;
+            await kvPutJson(env, uKey, userNow);
+            // track weekly referral for missions
+            const wk = weekKey();
+            const rk = `ref_week:${refIdNum}:${wk}`;
+            const rec = (await kvGetJson(env, rk)) || { count: 0 };
+            rec.count = (rec.count || 0) + 1;
+            await kvPutJson(env, rk, rec);
+            try { await tgApi('sendMessage', { chat_id: refIdNum, text: '🎉 یک الماس بابت معرفی کاربر جدید دریافت کردید.' }); } catch (_) {}
+          }
+        }
+      }
+    }
     const settings = await getSettings(env);
     const welcomeText = settings.welcome_message && !updateMode
       ? settings.welcome_message
