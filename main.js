@@ -191,17 +191,21 @@ async function tgUpload(method, formData) {
   }).then(r => r.json());
 }
 
-// Edit-in-place helper to reduce chat clutter (tries to edit callback message; falls back to send)
+// Edit-in-place helper to reduce chat clutter (handles media; falls back to send on failure)
 async function safeUpdateText(chatId, text, reply_markup, cb, parse_mode) {
   try {
     if (cb && cb.message && cb.message.message_id) {
-      return await tgApi('editMessageText', {
+      const isMedia = Boolean(cb.message.photo || cb.message.video || cb.message.document || cb.message.animation);
+      const method = isMedia ? 'editMessageCaption' : 'editMessageText';
+      const payload = {
         chat_id: chatId,
         message_id: cb.message.message_id,
-        text,
-        reply_markup,
-        parse_mode
-      });
+        reply_markup
+      };
+      if (parse_mode) payload.parse_mode = parse_mode;
+      if (isMedia) payload.caption = text; else payload.text = text;
+      const res = await tgApi(method, payload);
+      if (res && res.ok) return res;
     }
   } catch (_) {
     // ignore and fall back to send
@@ -1957,6 +1961,7 @@ async function onCallback(cb, env) {
     } catch (_) {}
   }
   if (data === 'MENU') {
+    try { await tgApi('answerCallbackQuery', { callback_query_id: cb.id }); } catch (_) {}
     // Enforce join before showing menu
     const requireJoin = await getRequiredChannels(env);
     if (requireJoin.length && !isAdmin(uid)) {
