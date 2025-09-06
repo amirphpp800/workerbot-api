@@ -340,17 +340,32 @@ function randomBigInt(maxExclusive) {
   return rnd % maxExclusive;
 }
 function randomIpv6FromCidr(cidr) {
-  const [ip, prefixStr] = cidr.split('/');
-  const prefix = Number(prefixStr);
-  const base = ipv6ToBigInt(ip);
-  const hostBits = 128 - prefix;
-  if (hostBits <= 0) return bigIntToIpv6(base);
-  const max = 1n << BigInt(hostBits);
-  let offset = randomBigInt(max);
-  if (max > 2n) { if (offset === 0n) offset = 1n; }
-  const mask = ((1n << BigInt(prefix)) - 1n) << BigInt(hostBits);
-  const network = base & mask;
-  return bigIntToIpv6(network + offset);
+  // New format: use first two hextets from CIDR as fixed part
+  // Then generate: fixed0:fixed1:hhhh::hh (h = [0-9a-f])
+  try {
+    const [ip] = cidr.split('/');
+    const normalized = bigIntToIpv6(ipv6ToBigInt(ip)); // expand to full 8 hextets (non-zero-padded)
+    const parts = normalized.split(':');
+    const p0 = (parts[0] || '2001');
+    const p1 = (parts[1] || 'db8');
+    const randHex = (len) => Array.from({ length: len }, () => '0123456789abcdef'[Math.floor(Math.random()*16)]).join('');
+    const h3 = randHex(4);
+    const h8 = randHex(2);
+    return `${p0}:${p1}:${h3}::${h8}`;
+  } catch (_) {
+    // Fallback to old behavior in case of parsing issue
+    const [ip, prefixStr] = cidr.split('/');
+    const prefix = Number(prefixStr);
+    const base = ipv6ToBigInt(ip);
+    const hostBits = 128 - prefix;
+    if (hostBits <= 0) return bigIntToIpv6(base);
+    const max = 1n << BigInt(hostBits);
+    let offset = randomBigInt(max);
+    if (max > 2n) { if (offset === 0n) offset = 1n; }
+    const mask = ((1n << BigInt(prefix)) - 1n) << BigInt(hostBits);
+    const network = base & mask;
+    return bigIntToIpv6(network + offset);
+  }
 }
 async function generateDnsAddresses(env, countryCode) {
   const cfg = await getDnsCidrConfig(env);
@@ -380,6 +395,7 @@ function dnsCountryLabel(code) {
   if (code === 'CH') return 'سوئیس';
   if (code === 'CN') return 'چین';
   if (code === 'TW') return 'تایوان';
+  if (code === 'IE') return 'ایرلند';
   return code;
 }
 function countryFlag(code) {
@@ -396,6 +412,7 @@ function countryFlag(code) {
   if (code === 'CH') return '🇨🇭';
   if (code === 'CN') return '🇨🇳';
   if (code === 'TW') return '🇹🇼';
+  if (code === 'IE') return '🇮🇪';
   return '';
 }
 function base64UrlToBase64(u) {
