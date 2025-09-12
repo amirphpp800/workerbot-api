@@ -6,11 +6,20 @@ import { handleUpdate } from '../main.js';
 export async function onRequestPost({ request, env, waitUntil }) {
   try {
     const update = await request.json();
-    // If handleUpdate returns a promise, ensure it's awaited
     const p = handleUpdate(update, env, { waitUntil });
-    if (p && typeof p.then === 'function') await p;
+    if (waitUntil && p && typeof p.then === 'function') {
+      waitUntil(p);
+    }
+    // Respond immediately; processing continues in background
     return new Response('ok');
   } catch (err) {
     return new Response('bad request', { status: 400 });
   }
 }
+
+// Optional: allow GET to /webhook to return a helpful message when opened in browser
+export async function onRequestGet() {
+  return new Response('Telegram webhook endpoint. Use POST from Telegram servers.');
+}
+
+
