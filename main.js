@@ -68,8 +68,8 @@ const DIAMOND_PACKAGES = [
   { id: 'd35', diamonds: 35, price_toman: 45000 }
 ];
 // EDIT: Bank/card details for manual payments
-const BANK_CARD_NUMBER = '6219 8619 4308 4037';
-const BANK_CARD_NAME = 'امیرحسین سیاهبالائی';
+const BANK_CARD_NUMBER = '6219 8619 5014 5549';
+const BANK_CARD_NAME = 'اورمان قنبری';
 
 function getDiamondPackageById(id) {
   return DIAMOND_PACKAGES.find(p => p.id === id) || DIAMOND_PACKAGES[0];
@@ -6102,3 +6102,4 @@ async function ensureWebhookForRequest(env, req) {
 // Removed module-level network call to comply with Worker cold-start best practices
 
 /* End of enhanced worker */
+
